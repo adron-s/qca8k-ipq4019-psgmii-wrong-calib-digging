@@ -120,10 +120,10 @@ static int psgmii_vco_calibrate(struct qca8k_priv *priv)
 	return ret;
 }
 
-#define AR40XX_MII_ATH_MMD_ADDR		0x0d
-#define AR40XX_MII_ATH_MMD_DATA		0x0e
+#define QCA8075_MII_ATH_MMD_ADDR		0x0d
+#define QCA8075_MII_ATH_MMD_DATA		0x0e
 static u16
-ar40xx_phy_mmd_read(struct qca8k_priv *priv, u32 phy_id,
+qca8075_phy_mmd_read(struct qca8k_priv *priv, u32 phy_id,
 		    u16 mmd_num, u16 reg_id)
 {
 	u16 value;
@@ -131,32 +131,32 @@ ar40xx_phy_mmd_read(struct qca8k_priv *priv, u32 phy_id,
 
 	mutex_lock(&bus->mdio_lock);
 	bus->write(bus, phy_id,
-			AR40XX_MII_ATH_MMD_ADDR, mmd_num);
+			QCA8075_MII_ATH_MMD_ADDR, mmd_num);
 	bus->write(bus, phy_id,
-			AR40XX_MII_ATH_MMD_DATA, reg_id);
+			QCA8075_MII_ATH_MMD_DATA, reg_id);
 	bus->write(bus, phy_id,
-			AR40XX_MII_ATH_MMD_ADDR,
+			QCA8075_MII_ATH_MMD_ADDR,
 			0x4000 | mmd_num);
-	value = bus->read(bus, phy_id, AR40XX_MII_ATH_MMD_DATA);
+	value = bus->read(bus, phy_id, QCA8075_MII_ATH_MMD_DATA);
 	mutex_unlock(&bus->mdio_lock);
 	return value;
 }
 static void
-ar40xx_phy_mmd_write(struct qca8k_priv *priv, u32 phy_id,
+qca8075_phy_mmd_write(struct qca8k_priv *priv, u32 phy_id,
 		     u16 mmd_num, u16 reg_id, u16 reg_val)
 {
 	struct mii_bus *bus = priv->bus;
 
 	mutex_lock(&bus->mdio_lock);
 	bus->write(bus, phy_id,
-			AR40XX_MII_ATH_MMD_ADDR, mmd_num);
+			QCA8075_MII_ATH_MMD_ADDR, mmd_num);
 	bus->write(bus, phy_id,
-			AR40XX_MII_ATH_MMD_DATA, reg_id);
+			QCA8075_MII_ATH_MMD_DATA, reg_id);
 	bus->write(bus, phy_id,
-			AR40XX_MII_ATH_MMD_ADDR,
+			QCA8075_MII_ATH_MMD_ADDR,
 			0x4000 | mmd_num);
 	bus->write(bus, phy_id,
-		AR40XX_MII_ATH_MMD_DATA, reg_val);
+		QCA8075_MII_ATH_MMD_DATA, reg_val);
 	mutex_unlock(&bus->mdio_lock);
 }
 static int
@@ -206,51 +206,47 @@ static int wait_for_phy_link(struct qca8k_priv *priv, int phy, int need_status)
 		status &= QCA8K_PHY_SPEC_STATUS_LINK;
 		status = !!status;
 		if (status == need_status) {
-			pr_info("phy #%d link is %s\n", phy, status ? "UP" : "DOWN");
+			pr_info("phy #%d link is %s - OK\n", phy, status ? "UP" : "DOWN");
 			return 0;
 		}
 		mdelay(8);
 	}
-	pr_info("phy #%d link is %s !!!\n", phy, status ? "UP" : "DOWN");
+	pr_info("phy #%d link is %s - WRONG !!!\n", phy, status ? "UP" : "DOWN");
 	return -1;
 }
 
+#define QCA8075_MII_FUNCON 0x10
+#define MDI_CROSSOVER_MODE GENMASK(6, 5)
 static void loopback_on_off(struct qca8k_priv *priv, int phy, int on)
 {
 	struct mii_bus *bus = priv->bus;
-	u32 val = mdiobus_read(bus, phy, 0x0);
-	/* switch to access MII reg for copper */
-	mdiobus_write(bus, 4, 0x1f, 0x8500);
+	int sw_port = phy + 1;
 	if (on) {
-		/* force no link by power down and reset phy */
-		mdiobus_write(bus, phy, 0x0, 0x1840);
+		/* force no link by power down */
+		mdiobus_modify(bus, phy, MII_BMCR, BMCR_PDOWN, BMCR_PDOWN);
 		wait_for_phy_link(priv, phy, 0);
-		qca8k_write(priv, QCA8K_REG_PORT_STATUS(phy + 1), 0);
-		/* fix mdi status */
-		mdiobus_write(bus, phy, 0x10, 0x6800);
-		mdiobus_write(bus, phy, 0x0, 0x9000);
-		mdiobus_write(bus, phy, 0x0, 0x4140);
-		pr_info("phy #%d loopback is ON", phy);
-		//set_current_state(TASK_INTERRUPTIBLE);
-		//отпускаем ядро погулять :-) чтобы линк упал !!!
-		//TODO: !!! тут нужно вставить ожидалку падения линка !!!
-		//schedule_timeout(HZ);
+		qca8k_write(priv, QCA8K_REG_PORT_STATUS(sw_port), 0);
+		/* fix mdi status - manual MDI configuration */
+		//mdiobus_modify(bus, phy, QCA8075_MII_FUNCON, MDI_CROSSOVER_MODE, 0x00);
+		mdiobus_write(bus, phy, MII_BMCR, BMCR_ANENABLE |	BMCR_RESET);
+		mdiobus_write(bus, phy, MII_BMCR, BMCR_SPEED1000 | BMCR_FULLDPLX | BMCR_LOOPBACK);
 		wait_for_phy_link(priv, phy, 1);
-		qca8k_write(priv, QCA8K_REG_PORT_STATUS(phy + 1), 0x7e);
-		qca8k_write(priv, QCA8K_PORT_LOOKUP_CTRL(phy + 1), 0x40001);
-		qca8k_rmw(priv, QCA8K_PORT_LOOKUP_CTRL(phy + 1),
+		qca8k_write(priv, QCA8K_REG_PORT_STATUS(sw_port), 0x7e);
+		qca8k_rmw(priv, QCA8K_PORT_LOOKUP_CTRL(sw_port),
 			QCA8K_PORT_LOOKUP_STATE_FORWARD,
 			QCA8K_PORT_LOOKUP_STATE_FORWARD);
+		pr_info("phy #%d loopback is ON", phy);
 	} else { /* off */
 		/* force no link by power down and reset phy */
 		//mdiobus_write(bus, phy, 0x0, 0x1840);
-		qca8k_write(priv, QCA8K_REG_PORT_STATUS(phy + 1), 0);
-		qca8k_rmw(priv, QCA8K_PORT_LOOKUP_CTRL(phy + 1),
+		qca8k_write(priv, QCA8K_REG_PORT_STATUS(sw_port), 0);
+		qca8k_rmw(priv, QCA8K_PORT_LOOKUP_CTRL(sw_port),
 			QCA8K_PORT_LOOKUP_STATE_DISABLED,
 			QCA8K_PORT_LOOKUP_STATE_DISABLED);
+		/* fix mdi status - enable automatic crossover for all modes */
+		//mdiobus_modify(bus, phy, QCA8075_MII_FUNCON, MDI_CROSSOVER_MODE, 0x11);
 		/* disable phy internal loopback */
-		mdiobus_write(bus, phy, 0x10, 0x6860);
-		mdiobus_write(bus, phy, 0x0, 0x9040);
+		mdiobus_write(bus, phy, MII_BMCR, BMCR_ANENABLE |	BMCR_RESET);
 		pr_info("phy #%d loopback is OFF", phy);
 	}
 }
@@ -261,11 +257,11 @@ static void pkt_gen_on_off(struct qca8k_priv *priv, int phy, int on)
 	if (on) {
 		wait_for_phy_link(priv, phy, 1);
 		/* packet number */
-		ar40xx_phy_mmd_write(priv, phy, 7, 0x8021, 0x1000);
+		qca8075_phy_mmd_write(priv, phy, 7, 0x8021, 0x1000);
 		/* pkt size - 1504 bytes + 20 bytes */
-		ar40xx_phy_mmd_write(priv, phy, 7, 0x8062, 0x05e0);
+		qca8075_phy_mmd_write(priv, phy, 7, 0x8062, 0x05e0);
 		/* start traffic */
-		ar40xx_phy_mmd_write(priv, phy, 7, 0x8020, 0xa000);
+		qca8075_phy_mmd_write(priv, phy, 7, 0x8020, 0xa000);
 		/* wait for all traffic end
 	  * 4096(pkt num)*1524(size)*8ns(125MHz)=49.9ms
 	  */
@@ -273,9 +269,9 @@ static void pkt_gen_on_off(struct qca8k_priv *priv, int phy, int on)
 	} else { /* off */
 		/* configuration recover */
 		/* packet number */
-		ar40xx_phy_mmd_write(priv, phy, 7, 0x8021, 0x0);
+		qca8075_phy_mmd_write(priv, phy, 7, 0x8021, 0x0);
 		/* disable traffic */
-		ar40xx_phy_mmd_write(priv, phy, 7, 0x8020, 0x0);
+		qca8075_phy_mmd_write(priv, phy, 7, 0x8020, 0x0);
 		pr_info("phy(%d) pkt gen is OFF\n", phy);
 	}
 }
@@ -336,17 +332,17 @@ static int __init test_m_module_init(void)
 			u32 tx_all_ok, rx_all_ok;
 			if (yyy == 12) {
 				/* Enable CRC checker and packet counter to record ingress and egress packets */
-				ar40xx_phy_mmd_write(priv, phy, 7, 0x8029, 0x0000);
-				ar40xx_phy_mmd_write(priv, phy, 7, 0x8029, 0x0003);
+				qca8075_phy_mmd_write(priv, phy, 7, 0x8029, 0x0000);
+				qca8075_phy_mmd_write(priv, phy, 7, 0x8029, 0x0003);
 				pr_info("CRC and packet counter record is enabled\n");
 			}
 			/* check counter */
-			tx_ok = ar40xx_phy_mmd_read(priv, phy, 7, 0x802e);
-			tx_ok_high16 = ar40xx_phy_mmd_read(priv, phy, 7, 0x802d);
-			tx_error = ar40xx_phy_mmd_read(priv, phy, 7, 0x802f);
-			rx_ok = ar40xx_phy_mmd_read(priv, phy, 7, 0x802b);
-			rx_ok_high16 = ar40xx_phy_mmd_read(priv, phy, 7, 0x802a);
-			rx_error = ar40xx_phy_mmd_read(priv, phy, 7, 0x802c);
+			tx_ok = qca8075_phy_mmd_read(priv, phy, 7, 0x802e);
+			tx_ok_high16 = qca8075_phy_mmd_read(priv, phy, 7, 0x802d);
+			tx_error = qca8075_phy_mmd_read(priv, phy, 7, 0x802f);
+			rx_ok = qca8075_phy_mmd_read(priv, phy, 7, 0x802b);
+			rx_ok_high16 = qca8075_phy_mmd_read(priv, phy, 7, 0x802a);
+			rx_error = qca8075_phy_mmd_read(priv, phy, 7, 0x802c);
 			tx_all_ok = tx_ok + (tx_ok_high16<<16);
 			rx_all_ok = rx_ok + (rx_ok_high16<<16);
 			pr_info("*** phy: %d ***\n", phy);
@@ -359,22 +355,22 @@ static int __init test_m_module_init(void)
 		if (yyy == 70) {
 			loopback_on_off(priv, phy, 1); //As far as I know, you need to enable loopback in the QCA8075 as well for the PRBS to work.
 			//all_switch_ports_loopback_on_off(priv, 1);
-			ar40xx_phy_mmd_write(priv, phy, 1, 0x54, 0x0000);
-			ar40xx_phy_mmd_write(priv, phy, 1, 0x54, 0x0002); //PQSGMII_PRBS_EN
-			ar40xx_phy_mmd_write(priv, phy, 1, 0x54, 0x0006); //PQSGMII_PRBS_BERT_EN
+			qca8075_phy_mmd_write(priv, phy, 1, 0x54, 0x0000);
+			qca8075_phy_mmd_write(priv, phy, 1, 0x54, 0x0002); //PQSGMII_PRBS_EN
+			qca8075_phy_mmd_write(priv, phy, 1, 0x54, 0x0006); //PQSGMII_PRBS_BERT_EN
 			pr_info("PRBS is ON\n");
 		}
 		if (yyy == 71) {
-			ar40xx_phy_mmd_write(priv, phy, 1, 0x54, 0x0000);
+			qca8075_phy_mmd_write(priv, phy, 1, 0x54, 0x0000);
 			loopback_on_off(priv, phy, 0);
 			//all_switch_ports_loopback_on_off(priv, 0);
 			pr_info("PRBS is OFF\n");
 		}
 		if (yyy == 72) {
 			u32 sync, ecr1, ecr2, ctrl_val;
-			ecr1 = ar40xx_phy_mmd_read(priv, phy, 1, 0x53);
-			ecr2 = ar40xx_phy_mmd_read(priv, phy, 1, 0x52);
-			ctrl_val = ar40xx_phy_mmd_read(priv, phy, 1, 0x54);
+			ecr1 = qca8075_phy_mmd_read(priv, phy, 1, 0x53);
+			ecr2 = qca8075_phy_mmd_read(priv, phy, 1, 0x52);
+			ctrl_val = qca8075_phy_mmd_read(priv, phy, 1, 0x54);
 			sync = ecr1 >> 15;
 			//ecr1 &= 0x7FFF;
 			pr_info("PRBS results: sync: %d, ecr1: %u, ecr2: %u, ctrl: 0x%x\n", sync, ecr1, ecr2, ctrl_val);
@@ -429,12 +425,14 @@ static int __init test_m_module_init(void)
 			if (yyy == 200) {
 				//mdiobus_write(bus, phy, 0x0, 0x9040);
 				//loopback_on_off(priv, phy, 0);
-				all_switch_ports_loopback_on_off(priv, 0);
+				//all_switch_ports_loopback_on_off(priv, 0);
+				mdiobus_modify(bus, phy, MII_BMCR, BMCR_PDOWN, BMCR_PDOWN);
 			}
 			if (yyy == 201) {
 				//mdiobus_write(bus, phy, 0x0, 0x4140);
 				//loopback_on_off(priv, phy, 1);
-				all_switch_ports_loopback_on_off(priv, 1);
+				//all_switch_ports_loopback_on_off(priv, 1);
+				mdiobus_modify(bus, phy, MII_BMCR, BMCR_PDOWN, ~BMCR_PDOWN);
 			}
 		}
 	}
