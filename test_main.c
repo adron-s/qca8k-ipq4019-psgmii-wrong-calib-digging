@@ -334,6 +334,7 @@ static int qca8k_do_dsa_sw_ports_self_test(struct qca8k_priv *priv)
 
 out_put_node:
 	of_node_put(ports);
+	//qca8k_fdb_flush(priv);
 	return err;
 }
 
