@@ -33,6 +33,9 @@ ramips:
 arm:
 	$(MAKE) arch ARCH=arm DEVICE=hap_ac2
 
+arm-b1300:
+	$(MAKE) arch ARCH=arm DEVICE=gl-b1300
+
 arm64:
 	$(MAKE) arch ARCH=arm64 DEVICE=rb5009
 

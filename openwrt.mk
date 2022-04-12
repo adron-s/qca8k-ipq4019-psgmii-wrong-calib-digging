@@ -32,6 +32,13 @@ ifeq ($(DEVICE),hap_ac2)
   CROSS_COMPILE_PREFIX := arm
 endif
 
+ifeq ($(DEVICE),gl-b1300)
+  TOOLCHAIN_DIR := toolchain-arm_cortex-a7+neon-vfpv4_gcc-11.2.0_musl_eabi
+  TARGET_DIR := target-arm_cortex-a7+neon-vfpv4_musl_eabi
+  KERNEL_SUB_DIR := linux-ipq40xx_generic
+  CROSS_COMPILE_PREFIX := arm
+endif
+
 ifeq ($(DEVICE),rb5009)
   TOOLCHAIN_DIR := toolchain-aarch64_cortex-a72_gcc-11.2.0_musl
   TARGET_DIR := target-aarch64_cortex-a72_musl

@@ -278,18 +278,37 @@ struct phy_device *phy, int pkts_num)
 static int qca8k_test_dsa_port_for_errors(struct qca8k_priv *priv,
 struct phy_device *phy, int port)
 {
-	int res;
+	int res = 0;
 	const int test_pkts_num = 4096;
 
-	qca8k_phy_loopback_on_off(priv, phy, port, 1);
-	qca8k_switch_port_loopback_on_off(priv, port, 1);
-	qca8k_phy_pkt_gen_on_off(priv, phy, test_pkts_num, 1);
+	if (owl == 0) {
+		qca8k_phy_loopback_on_off(priv, phy, port, 1);
+		qca8k_switch_port_loopback_on_off(priv, port, 1);
+		qca8k_phy_pkt_gen_on_off(priv, phy, test_pkts_num, 1);
 
-	res = qca8k_get_phy_pkt_gen_test_result(phy, test_pkts_num);
+		res = qca8k_get_phy_pkt_gen_test_result(phy, test_pkts_num);
 
-	qca8k_phy_pkt_gen_on_off(priv, phy, test_pkts_num, 0);
-	qca8k_switch_port_loopback_on_off(priv, port, 0);
-	qca8k_phy_loopback_on_off(priv, phy, port, 0);
+		qca8k_phy_pkt_gen_on_off(priv, phy, test_pkts_num, 0);
+		qca8k_switch_port_loopback_on_off(priv, port, 0);
+		qca8k_phy_loopback_on_off(priv, phy, port, 0);
+	}
+	if (owl == 500) {
+		/* Enable CRC checker and packets counters */
+		phy_write_mmd(phy, 7, QCA8075_MMD7_CRC_AND_PKTS_COUNT,
+			0x0000);
+		phy_write_mmd(phy, 7, QCA8075_MMD7_CRC_AND_PKTS_COUNT,
+			QCA8075_MMD7_CNT_FRAME_CHK_EN | QCA8075_MMD7_CNT_SELFCLR);
+	}
+	if (owl == 501) {
+		qca8k_get_phy_pkt_gen_test_result(phy, 0);
+	}
+	if (owl == 502) {
+		//phy_modify(phy, MII_BMCR, BMCR_PDOWN, BMCR_PDOWN);
+		//phy_write(phy, MII_BMCR, BMCR_ANENABLE | BMCR_RESET);
+		qca8k_phy_pkt_gen_on_off(priv, phy, test_pkts_num, 1);
+		qca8k_get_phy_pkt_gen_test_result(phy, 0);
+		qca8k_phy_pkt_gen_on_off(priv, phy, test_pkts_num, 0);
+	}
 	return res;
 }
 
@@ -362,7 +381,7 @@ static void *get_priv_from_if_name(const char *dev_name)
 //выполняется при загрузке модуля
 static int __init test_m_module_init(void)
 {
-	struct qca8k_priv *priv = (void *)owl;
+	struct qca8k_priv *priv;
 	priv = get_priv_from_if_name("eth0");
 	pr_info("priv: 0x%x\n", (unsigned int)priv);
 	if (!priv) {
