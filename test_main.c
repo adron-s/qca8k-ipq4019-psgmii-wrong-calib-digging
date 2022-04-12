@@ -338,13 +338,38 @@ out_put_node:
 	return err;
 }
 
+static void *get_priv_from_if_name(const char *dev_name)
+{
+	struct net_device *dev;
+	dev = dev_get_by_name(&init_net, dev_name);
+	if(!dev){
+		pr_err("Can't get dev %s!\n", dev_name);
+		return NULL;
+	}
+	pr_info("Found dev with name = %s and index = %d\n", 
+		dev->name, dev->ifindex);
+	if (dev->dsa_ptr) {
+		struct dsa_port *dp = dev->dsa_ptr;
+		struct dsa_switch	*ds = dp->ds;
+		pr_info("DSA port_ptr: 0x%x, switch_ptr: 0x%x\n", (u32)dp, (u32)ds);
+		return ds->priv;
+	}
+	dev_put(dev);
+	return NULL;
+}
+
 //*********************************************************
 //выполняется при загрузке модуля
 static int __init test_m_module_init(void)
 {
 	struct qca8k_priv *priv = (void *)owl;
+	priv = get_priv_from_if_name("eth0");
 	pr_info("priv: 0x%x\n", (unsigned int)priv);
-	if (yyy == 69 && priv) {
+	if (!priv) {
+		pr_err("owl(priv) is NULL !!!\n");
+		return -ENOENT;
+	}
+	if (yyy == 69) {
 		struct phy_device *phy = priv->psgmii_ethphy;
 		struct mii_bus *bus = priv->bus;
 		pr_info("phy: 0x%x, phy_id: %08x\n", (unsigned int)phy, phy->phy_id);
@@ -352,8 +377,6 @@ static int __init test_m_module_init(void)
 		pr_info("Doing PSGMII PHYs calibration\n");
 		psgmii_vco_calibrate(priv);
 		pr_info("Calibration is DONE\n");
-	} else {
-		pr_err("owl(priv) is NULL !!!\n");
 	}
 	if (0) {
 		struct mii_bus *bus = priv->bus;

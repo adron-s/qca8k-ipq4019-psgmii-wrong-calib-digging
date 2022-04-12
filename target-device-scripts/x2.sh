@@ -1,6 +1,6 @@
 COUNT=0
 while [ 1 ]; do
-  if ping -c 2 7.70.129.12; then
+  if ping -c 2 7.70.129.14; then
     echo "OK - $COUNT"
     COUNT=$((COUNT+1))
     insmod /tmp/test_main.ko owl=$(cat /tmp/priv_addr.txt) $@ 2>/dev/null yyy=69
