@@ -22,6 +22,7 @@
 #include <linux/mtd/partitions.h>
 #include <linux/err.h>
 #include <linux/iopoll.h>
+#include <linux/reset.h>
 #include <linux/of_mdio.h>
 #include <linux/mfd/syscon.h>
 #include <net/protocol.h>
@@ -264,9 +265,9 @@ struct phy_device *phy, int pkts_num)
 	pr_info("tx_ok: %d, tx_error: %d\n", tx_all_ok, tx_error);
 	pr_info("rx_ok: %d, rx_error: %d\n", rx_all_ok, rx_error);
 
-	if (tx_all_ok != rx_all_ok)
+	if (tx_all_ok < pkts_num)
 		return -1;
-	if(rx_all_ok != pkts_num)
+	if(rx_all_ok < pkts_num)
 		return -2;
 	if(tx_error)
 		return -3;
@@ -274,6 +275,33 @@ struct phy_device *phy, int pkts_num)
 		return -4;
 	return 0; /* test is ok */
 }
+
+static void psgmii_do_reset(struct qca8k_priv *priv, int what)
+{
+	struct reset_control *rst;
+	const char rst_name[ ] = "psgmii_rst";
+	rst = devm_reset_control_get(priv->dev, rst_name);
+	if (IS_ERR(rst)) {
+		pr_err("Failed to get %s control!\n", rst_name);
+		return;
+	}
+
+	if (what == 0 || what == 2) {
+		pr_info("Doing %s reset assert\n", rst_name);
+		reset_control_assert(rst);
+	}
+	if (what == 2) {
+		set_current_state(TASK_INTERRUPTIBLE);
+		schedule_timeout(HZ / 10);
+	}
+	if (what == 1 || what == 2) {
+		reset_control_deassert(rst);
+		pr_info("Doing %s reset deassert\n", rst_name);
+	}
+
+	reset_control_put(rst);
+}
+
 
 static int qca8k_test_dsa_port_for_errors(struct qca8k_priv *priv,
 struct phy_device *phy, int port)
@@ -440,6 +468,7 @@ static int __init test_m_module_init(void)
 			int a, result;
 			for (a = 0; a < QCA8K_PSGMII_CALB_NUM; a++) {
 				pr_info("Doing QCA8075 and PSGMII calibration\n");
+				psgmii_do_reset(priv, 2);
 				psgmii_vco_calibrate(priv);
 				result = qca8k_do_dsa_sw_ports_self_test(priv);
 				pr_info("qca8k dsa_sw_ports post calibration test is %s\n",
@@ -460,6 +489,8 @@ static int __init test_m_module_init(void)
 			mdiobus_write(bus, phy, MII_BMCR, BMCR_ANENABLE | BMCR_RESET);
 			mdiobus_modify(bus, phy, MII_BMCR, BMCR_PDOWN, BMCR_PDOWN);
 		}
+		if (yyy == 210 || yyy == 211 || yyy == 212)
+			psgmii_do_reset(priv, yyy - 210);
 	}
 
 	return -ENOMEM;
