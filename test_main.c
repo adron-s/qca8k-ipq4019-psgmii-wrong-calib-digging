@@ -46,7 +46,9 @@ static int owl_phy = -1;
 module_param(owl_phy, int, 0);
 MODULE_PARM_DESC(owl_phy, "phy for override default value");
 
-static int psgmii_vco_calibrate(struct qca8k_priv *priv)
+static void ipq_psgmii_do_reset(struct qca8k_priv *, int);
+
+static int psgmii_vco_calibrate(struct qca8k_priv *priv, int post_reset_delay)
 {
 	int val, ret;
 
@@ -57,9 +59,22 @@ static int psgmii_vco_calibrate(struct qca8k_priv *priv)
 
 	/* Fix PSGMII RX 20bit */
 	ret = phy_write(priv->psgmii_ethphy, MII_BMCR, 0x5b);
-	/* Reset PSGMII PHY */
+	/* Freeze PSGMII RX CDR */
+	ret = phy_write(priv->psgmii_ethphy, MII_RESV2, 0x2230);
+
+	/* Reset PHY PSGMII */
 	ret = phy_write(priv->psgmii_ethphy, MII_BMCR, 0x1b);
-	/* Release reset */
+	/* Reset IPQ-40XX PSGMII */
+	ipq_psgmii_do_reset(priv, 0);
+
+	if (post_reset_delay > 0) {
+		set_current_state(TASK_INTERRUPTIBLE);
+		schedule_timeout(msecs_to_jiffies(post_reset_delay));
+	}
+
+	/* Release IPQ-40XX PSGMII reset */
+	ipq_psgmii_do_reset(priv, 1);
+	/* Release PHY PSGMII reset */
 	ret = phy_write(priv->psgmii_ethphy, MII_BMCR, 0x5b);
 	/* Poll for VCO PLL calibration finish */
 	ret = phy_read_mmd_poll_timeout(priv->psgmii_ethphy,
@@ -74,13 +89,10 @@ static int psgmii_vco_calibrate(struct qca8k_priv *priv)
 	}
 	/* Check malibu(qca8075) PSGMII calibration done end ... */
 
-	/* Freeze PSGMII RX CDR */
-	ret = phy_write(priv->psgmii_ethphy, MII_RESV2, 0x2230);
-
 	/* Start PSGMIIPHY VCO PLL calibration */
-	ret = regmap_set_bits(priv->psgmii,
+	/* ret = regmap_set_bits(priv->psgmii,
 			PSGMIIPHY_VCO_CALIBRATION_CONTROL_REGISTER_1,
-			PSGMIIPHY_REG_PLL_VCO_CALIB_RESTART);
+			PSGMIIPHY_REG_PLL_VCO_CALIB_RESTART); */
 
 	/* Poll for PSGMIIPHY PLL calibration finish */
 	ret = regmap_read_poll_timeout(priv->psgmii,
@@ -119,8 +131,9 @@ qca8k_rmw(struct qca8k_priv *priv, u32 reg, u32 mask, u32 write_val)
 {
 	return regmap_update_bits(priv->regmap, reg, mask, write_val);
 }
+#undef QCA8K_PSGMII_CALB_NUM
 
-#define	QCA8K_PSGMII_CALB_NUM							100
+#define	QCA8K_PSGMII_CALB_NUM							10
 #define QCA8K_PORT_LOOKUP_LOOPBACK				BIT(21)
 #define	MII_QCA8075_SSTATUS								0x11
 #define QCA8075_PHY_SPEC_STATUS_LINK			BIT(10)
@@ -161,7 +174,7 @@ struct phy_device *phy, int need_status)
 	int a;
 	u16 status;
 
-	for (a = 0; a < QCA8K_PSGMII_CALB_NUM; a++) {
+	for (a = 0; a < 100; a++) {
 		status = phy_read(phy, MII_QCA8075_SSTATUS);
 		status &= QCA8075_PHY_SPEC_STATUS_LINK;
 		status = !!status;
@@ -276,7 +289,7 @@ struct phy_device *phy, int pkts_num)
 	return 0; /* test is ok */
 }
 
-static void psgmii_do_reset(struct qca8k_priv *priv, int what)
+static void ipq_psgmii_do_reset(struct qca8k_priv *priv, int how)
 {
 	struct reset_control *rst;
 	const char rst_name[ ] = "psgmii_rst";
@@ -286,17 +299,17 @@ static void psgmii_do_reset(struct qca8k_priv *priv, int what)
 		return;
 	}
 
-	if (what == 0 || what == 2) {
-		pr_info("Doing %s reset assert\n", rst_name);
+	if (how == 0 || how >= 10) {
+		pr_info("Doing %s assert\n", rst_name);
 		reset_control_assert(rst);
 	}
-	if (what == 2) {
+	if (how >= 10) {
 		set_current_state(TASK_INTERRUPTIBLE);
-		schedule_timeout(HZ / 10);
+		schedule_timeout(msecs_to_jiffies(100 * how));
 	}
-	if (what == 1 || what == 2) {
+	if (how == 1 || how >= 10) {
 		reset_control_deassert(rst);
-		pr_info("Doing %s reset deassert\n", rst_name);
+		pr_info("Doing %s deassert\n", rst_name);
 	}
 
 	reset_control_put(rst);
@@ -313,7 +326,11 @@ struct phy_device *phy, int port)
 		qca8k_phy_loopback_on_off(priv, phy, port, 1);
 		qca8k_switch_port_loopback_on_off(priv, port, 1);
 		qca8k_phy_pkt_gen_on_off(priv, phy, test_pkts_num, 1);
-
+		if (phy->mdio.addr == 2) {
+			int val = 0;
+			if (!regmap_read(priv->psgmii, 0x1f0, &val))
+				pr_info("ipq psgmii reg 0x1f0: 0x%x\n", val);
+		}
 		res = qca8k_get_phy_pkt_gen_test_result(phy, test_pkts_num);
 
 		qca8k_phy_pkt_gen_on_off(priv, phy, test_pkts_num, 0);
@@ -422,7 +439,7 @@ static int __init test_m_module_init(void)
 		pr_info("phy: 0x%x, phy_id: %08x\n", (unsigned int)phy, phy->phy_id);
 		pr_info("mii_bus: 0x%x, bus->name: %s\n", (unsigned int)bus, bus->name);
 		pr_info("Doing PSGMII PHYs calibration\n");
-		psgmii_vco_calibrate(priv);
+		psgmii_vco_calibrate(priv, 100);
 		pr_info("Calibration is DONE\n");
 	}
 	if (0) {
@@ -450,7 +467,7 @@ static int __init test_m_module_init(void)
 				bus->write(bus, phy_addr, MII_BMCR, bmcr);
 			} */
 		}
-		//psgmii_vco_calibrate(priv);
+		//psgmii_vco_calibrate(priv, 100);
 	}
 
 	if (yyy == 189) {
@@ -465,11 +482,13 @@ static int __init test_m_module_init(void)
 
 	if (1) {
 		if (yyy == 200) {
-			int a, result;
+			int a, result, skip_calibration = 0;
 			for (a = 0; a < QCA8K_PSGMII_CALB_NUM; a++) {
 				pr_info("Doing QCA8075 and PSGMII calibration\n");
-				psgmii_do_reset(priv, 2);
-				psgmii_vco_calibrate(priv);
+				if (skip_calibration)
+					skip_calibration = 0;
+				else
+					psgmii_vco_calibrate(priv, 100);
 				result = qca8k_do_dsa_sw_ports_self_test(priv);
 				pr_info("qca8k dsa_sw_ports post calibration test is %s\n",
 					result ? "FAULT!!!" : "Ok");
@@ -477,6 +496,8 @@ static int __init test_m_module_init(void)
 					break;
 				} else {
 					schedule();
+					psgmii_vco_calibrate(priv, 5000);
+					skip_calibration = 1;
 				}
 			}
 		}
@@ -489,8 +510,10 @@ static int __init test_m_module_init(void)
 			mdiobus_write(bus, phy, MII_BMCR, BMCR_ANENABLE | BMCR_RESET);
 			mdiobus_modify(bus, phy, MII_BMCR, BMCR_PDOWN, BMCR_PDOWN);
 		}
-		if (yyy == 210 || yyy == 211 || yyy == 212)
-			psgmii_do_reset(priv, yyy - 210);
+		if (yyy == 210 || yyy == 211)
+			ipq_psgmii_do_reset(priv, yyy - 210);
+		if (yyy == 212)
+			ipq_psgmii_do_reset(priv, 100);
 	}
 
 	return -ENOMEM;
