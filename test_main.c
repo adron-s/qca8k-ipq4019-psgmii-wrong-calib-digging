@@ -492,7 +492,7 @@ static int __init test_m_module_init(void)
 				} else {
 					schedule();
 					if (a > 0 && a % 10 == 0) {
-						ipq_psgmii_do_reset(priv, 10000);
+						ipq_psgmii_do_reset(priv, 100);
 						set_current_state(TASK_INTERRUPTIBLE);
 						schedule_timeout(msecs_to_jiffies(a * 100));
 					}

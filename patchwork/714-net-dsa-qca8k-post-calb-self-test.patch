@@ -1,6 +1,6 @@
 diff -rNu a/drivers/net/dsa/qca/qca8k-ipq4019.c b/drivers/net/dsa/qca/qca8k-ipq4019.c
 --- a/drivers/net/dsa/qca/qca8k-ipq4019.c	2022-04-11 11:01:21.796045947 +0300
-+++ b/drivers/net/dsa/qca/qca8k-ipq4019.c	2022-04-14 10:18:30.189051780 +0300
++++ b/drivers/net/dsa/qca/qca8k-ipq4019.c	2022-04-14 10:52:55.976137908 +0300
 @@ -612,69 +612,322 @@
  	return 0;
  }
@@ -325,7 +325,7 @@ diff -rNu a/drivers/net/dsa/qca/qca8k-ipq4019.c b/drivers/net/dsa/qca/qca8k-ipq4
 +		} else {
 +			schedule();
 +			if (a > 0 && a % 10 == 0) {
-+				ipq_psgmii_do_reset(priv, 10000);
++				ipq_psgmii_do_reset(priv, 100);
 +				set_current_state(TASK_INTERRUPTIBLE);
 +				schedule_timeout(msecs_to_jiffies(a * 100));
 +			}

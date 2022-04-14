@@ -909,7 +909,7 @@ static int psgmii_vco_calibrate_and_test(struct dsa_switch *ds)
 		} else {
 			schedule();
 			if (a > 0 && a % 10 == 0) {
-				ipq_psgmii_do_reset(priv, 10000);
+				ipq_psgmii_do_reset(priv, 100);
 				set_current_state(TASK_INTERRUPTIBLE);
 				schedule_timeout(msecs_to_jiffies(a * 100));
 			}
