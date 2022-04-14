@@ -7,9 +7,10 @@ while [ 1 ]; do
     ip link set down dev port3
     sleep 1
     insmod /tmp/test_main.ko $@ 2>/dev/null yyy=200
-    if dmesg | grep FAULT >/dev/null; then
-    	echo "OK with retry - $COUNT"
-	    echo "OK with retry - $COUNT" | nc 172.20.1.77 1112
+    RETR_COUNT=`dmesg | grep "calibration retries" | sed -n 's/.*after \([0-9]\+\) calib.*/\1/p'`
+    if [ -n "${RETR_COUNT}" ]; then
+    	echo "OK with retryes(${RETR_COUNT}) - $COUNT"
+	    echo "OK with retryes(${RETR_COUNT}) - $COUNT" | nc 172.20.1.77 1112
 	  else
 	  	echo "OK - $COUNT"
 	  	echo "OK - $COUNT" | nc 172.20.1.77 1112

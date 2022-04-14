@@ -616,20 +616,26 @@ static void ipq_psgmii_do_reset(struct qca8k_priv *priv, int how)
 {
 	struct reset_control *rst;
 	const char rst_name[ ] = "psgmii_rst";
-
 	rst = devm_reset_control_get(priv->dev, rst_name);
 	if (IS_ERR(rst)) {
 		dev_err(priv->dev, "Failed to get %s control!\n", rst_name);
 		return;
 	}
 
-	if (how == 0)
+	if (how == 0 || how >= 10) {
 		reset_control_assert(rst);
-	if (how == 1)
+	}
+	if (how >= 10) {
+		set_current_state(TASK_INTERRUPTIBLE);
+		schedule_timeout(msecs_to_jiffies(100 * how));
+	}
+	if (how == 1 || how >= 10) {
 		reset_control_deassert(rst);
+	}
 
 	reset_control_put(rst);
 }
+
 
 static int psgmii_vco_calibrate(struct qca8k_priv *priv, int post_reset_delay)
 {
@@ -886,17 +892,13 @@ out_put_node:
 
 static int psgmii_vco_calibrate_and_test(struct dsa_switch *ds)
 {
-	int ret, a, test_result, skip_calibration = 0;
+	int ret, a, test_result;
 	struct qca8k_priv *priv = ds->priv;
 
-	for (a = 0; a < QCA8K_PSGMII_CALB_NUM; a++) {
-		if (skip_calibration) {
-			skip_calibration = 0;
-		} else {
-			ret = psgmii_vco_calibrate(priv, 100);
-			if (ret)
-				return ret;
-		}
+	for (a = 0; a <= QCA8K_PSGMII_CALB_NUM; a++) {
+		ret = psgmii_vco_calibrate(priv, 100);
+		if (ret)
+			return ret;
 		test_result = qca8k_do_dsa_sw_ports_self_test(priv);
 		if (!test_result) {
 			if (a > 0) {
@@ -906,10 +908,11 @@ static int psgmii_vco_calibrate_and_test(struct dsa_switch *ds)
 			return 0;
 		} else {
 			schedule();
-			ret = psgmii_vco_calibrate(priv, 5000);
-			if (ret)
-				return ret;
-			skip_calibration = 1;
+			if (a > 0 && a % 10 == 0) {
+				ipq_psgmii_do_reset(priv, 10000);
+				set_current_state(TASK_INTERRUPTIBLE);
+				schedule_timeout(msecs_to_jiffies(a * 100));
+			}
 		}
 	}
 

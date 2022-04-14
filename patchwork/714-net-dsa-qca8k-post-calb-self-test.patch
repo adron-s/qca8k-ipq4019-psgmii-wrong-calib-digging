@@ -1,7 +1,7 @@
 diff -rNu a/drivers/net/dsa/qca/qca8k-ipq4019.c b/drivers/net/dsa/qca/qca8k-ipq4019.c
 --- a/drivers/net/dsa/qca/qca8k-ipq4019.c	2022-04-11 11:01:21.796045947 +0300
-+++ b/drivers/net/dsa/qca/qca8k-ipq4019.c	2022-04-14 08:20:35.090907593 +0300
-@@ -612,69 +612,319 @@
++++ b/drivers/net/dsa/qca/qca8k-ipq4019.c	2022-04-14 10:18:30.189051780 +0300
+@@ -612,69 +612,322 @@
  	return 0;
  }
  
@@ -10,20 +10,26 @@ diff -rNu a/drivers/net/dsa/qca/qca8k-ipq4019.c b/drivers/net/dsa/qca/qca8k-ipq4
 +{
 +	struct reset_control *rst;
 +	const char rst_name[ ] = "psgmii_rst";
-+
 +	rst = devm_reset_control_get(priv->dev, rst_name);
 +	if (IS_ERR(rst)) {
 +		dev_err(priv->dev, "Failed to get %s control!\n", rst_name);
 +		return;
 +	}
 +
-+	if (how == 0)
++	if (how == 0 || how >= 10) {
 +		reset_control_assert(rst);
-+	if (how == 1)
++	}
++	if (how >= 10) {
++		set_current_state(TASK_INTERRUPTIBLE);
++		schedule_timeout(msecs_to_jiffies(100 * how));
++	}
++	if (how == 1 || how >= 10) {
 +		reset_control_deassert(rst);
++	}
 +
 +	reset_control_put(rst);
 +}
++
 +
 +static int psgmii_vco_calibrate(struct qca8k_priv *priv, int post_reset_delay)
  {
@@ -302,17 +308,13 @@ diff -rNu a/drivers/net/dsa/qca/qca8k-ipq4019.c b/drivers/net/dsa/qca/qca8k-ipq4
 +
 +static int psgmii_vco_calibrate_and_test(struct dsa_switch *ds)
 +{
-+	int ret, a, test_result, skip_calibration = 0;
++	int ret, a, test_result;
 +	struct qca8k_priv *priv = ds->priv;
 +
-+	for (a = 0; a < QCA8K_PSGMII_CALB_NUM; a++) {
-+		if (skip_calibration) {
-+			skip_calibration = 0;
-+		} else {
-+			ret = psgmii_vco_calibrate(priv, 100);
-+			if (ret)
-+				return ret;
-+		}
++	for (a = 0; a <= QCA8K_PSGMII_CALB_NUM; a++) {
++		ret = psgmii_vco_calibrate(priv, 100);
++		if (ret)
++			return ret;
 +		test_result = qca8k_do_dsa_sw_ports_self_test(priv);
 +		if (!test_result) {
 +			if (a > 0) {
@@ -322,10 +324,11 @@ diff -rNu a/drivers/net/dsa/qca/qca8k-ipq4019.c b/drivers/net/dsa/qca/qca8k-ipq4
 +			return 0;
 +		} else {
 +			schedule();
-+			ret = psgmii_vco_calibrate(priv, 5000);
-+			if (ret)
-+				return ret;
-+			skip_calibration = 1;
++			if (a > 0 && a % 10 == 0) {
++				ipq_psgmii_do_reset(priv, 10000);
++				set_current_state(TASK_INTERRUPTIBLE);
++				schedule_timeout(msecs_to_jiffies(a * 100));
++			}
 +		}
 +	}
 +
@@ -347,7 +350,7 @@ diff -rNu a/drivers/net/dsa/qca/qca8k-ipq4019.c b/drivers/net/dsa/qca/qca8k-ipq4
  					PSGMIIPHY_MODE_ATHR_CSCO_MODE_25M);
 diff -rNu a/drivers/net/dsa/qca/qca8k-ipq4019.h b/drivers/net/dsa/qca/qca8k-ipq4019.h
 --- a/drivers/net/dsa/qca/qca8k-ipq4019.h	2022-04-11 11:01:21.796045947 +0300
-+++ b/drivers/net/dsa/qca/qca8k-ipq4019.h	2022-04-14 08:16:11.498360798 +0300
++++ b/drivers/net/dsa/qca/qca8k-ipq4019.h	2022-04-14 10:02:54.657752425 +0300
 @@ -150,6 +150,7 @@
  #define   QCA8K_PORT_LOOKUP_STATE_FORWARD		(4 << 16)
  #define   QCA8K_PORT_LOOKUP_STATE			GENMASK(18, 16)
@@ -376,7 +379,7 @@ diff -rNu a/drivers/net/dsa/qca/qca8k-ipq4019.h b/drivers/net/dsa/qca/qca8k-ipq4
 +#define   QCA8075_MMD7_EG_FRAME_RECV_CNT_HI	0x802d
 +#define   QCA8075_MMD7_EG_FRAME_RECV_CNT_LO	0x802e
 +#define   QCA8075_MMD7_EG_FRAME_ERR_CNT			0x802f
-+#define   QCA8K_PSGMII_CALB_NUM							10
++#define   QCA8K_PSGMII_CALB_NUM							100
 +
  enum {
  	QCA8K_PORT_SPEED_10M = 0,

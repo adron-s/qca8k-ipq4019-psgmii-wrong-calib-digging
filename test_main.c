@@ -52,7 +52,7 @@ static void ipq_psgmii_do_reset(struct qca8k_priv *priv, int how)
 	const char rst_name[ ] = "psgmii_rst";
 	rst = devm_reset_control_get(priv->dev, rst_name);
 	if (IS_ERR(rst)) {
-		pr_err("Failed to get %s control!\n", rst_name);
+		dev_err(priv->dev, "Failed to get %s control!\n", rst_name);
 		return;
 	}
 
@@ -77,7 +77,7 @@ static int psgmii_vco_calibrate(struct qca8k_priv *priv, int post_reset_delay)
 	int val, ret;
 
 	if (!priv->psgmii_ethphy) {
-		pr_err("PSGMII eth PHY missing, calibration failed!\n");
+		dev_err(priv->dev, "PSGMII eth PHY missing, calibration failed!\n");
 		return -ENODEV;
 	}
 
@@ -110,7 +110,7 @@ static int psgmii_vco_calibrate(struct qca8k_priv *priv, int post_reset_delay)
 				       val, val & PSGMIIPHY_REG_PLL_VCO_CALIB_READY,
 				       10000, 1000000);
 	if (ret) {
-		pr_err("IPQ PSGMIIPHY VCO calibration PLL not ready\n");
+		dev_err(priv->dev, "IPQ PSGMIIPHY VCO calibration PLL not ready\n");
 		return ret;
 	}
 
@@ -124,7 +124,7 @@ static int psgmii_vco_calibrate(struct qca8k_priv *priv, int post_reset_delay)
 					10000, 1000000,
 					false);
 	if (ret) {
-		pr_err("QCA807x PSGMII VCO calibration PLL not ready\n");
+		dev_err(priv->dev, "QCA807x PSGMII VCO calibration PLL not ready\n");
 		return ret;
 	}
 
@@ -153,9 +153,8 @@ qca8k_rmw(struct qca8k_priv *priv, u32 reg, u32 mask, u32 write_val)
 {
 	return regmap_update_bits(priv->regmap, reg, mask, write_val);
 }
-#undef QCA8K_PSGMII_CALB_NUM
 
-#define	QCA8K_PSGMII_CALB_NUM							10
+#define	QCA8K_PSGMII_CALB_NUM							100
 #define QCA8K_PORT_LOOKUP_LOOPBACK				BIT(21)
 #define	MII_QCA8075_SSTATUS								0x11
 #define QCA8075_PHY_SPEC_STATUS_LINK			BIT(10)
@@ -477,22 +476,26 @@ static int __init test_m_module_init(void)
 
 	if (1) {
 		if (yyy == 200) {
-			int a, result, skip_calibration = 0;
-			for (a = 0; a < QCA8K_PSGMII_CALB_NUM; a++) {
+			int a, result;
+			for (a = 0; a <= QCA8K_PSGMII_CALB_NUM; a++) {
 				pr_info("Doing QCA8075 and PSGMII calibration\n");
-				if (skip_calibration)
-					skip_calibration = 0;
-				else
-					psgmii_vco_calibrate(priv, 100);
+				psgmii_vco_calibrate(priv, 100);
 				result = qca8k_do_dsa_sw_ports_self_test(priv);
 				pr_info("qca8k dsa_sw_ports post calibration test is %s\n",
 					result ? "FAULT!!!" : "Ok");
 				if (!result) {
+					if (a > 0) {
+						dev_warn(priv->dev,	"PSGMII work was stabilized after %d "
+						"calibration retries !\n", a);
+					}
 					break;
 				} else {
 					schedule();
-					psgmii_vco_calibrate(priv, 5000);
-					skip_calibration = 1;
+					if (a > 0 && a % 10 == 0) {
+						ipq_psgmii_do_reset(priv, 10000);
+						set_current_state(TASK_INTERRUPTIBLE);
+						schedule_timeout(msecs_to_jiffies(a * 100));
+					}
 				}
 			}
 		}
