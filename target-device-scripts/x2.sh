@@ -1,4 +1,5 @@
 COUNT=0
+ip link set up dev port3
 while [ 1 ]; do
   if ping -c 2 7.70.129.14; then
   	dmesg -c > /dev/null

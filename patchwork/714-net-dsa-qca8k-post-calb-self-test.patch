@@ -1,7 +1,113 @@
 diff -rNu a/drivers/net/dsa/qca/qca8k-ipq4019.c b/drivers/net/dsa/qca/qca8k-ipq4019.c
 --- a/drivers/net/dsa/qca/qca8k-ipq4019.c	2022-04-11 11:01:21.796045947 +0300
-+++ b/drivers/net/dsa/qca/qca8k-ipq4019.c	2022-04-11 11:00:55.114473640 +0300
-@@ -668,13 +668,225 @@
++++ b/drivers/net/dsa/qca/qca8k-ipq4019.c	2022-04-14 08:20:35.090907593 +0300
+@@ -612,69 +612,319 @@
+ 	return 0;
+ }
+ 
+-static int psgmii_vco_calibrate(struct dsa_switch *ds)
++static void ipq_psgmii_do_reset(struct qca8k_priv *priv, int how)
++{
++	struct reset_control *rst;
++	const char rst_name[ ] = "psgmii_rst";
++
++	rst = devm_reset_control_get(priv->dev, rst_name);
++	if (IS_ERR(rst)) {
++		dev_err(priv->dev, "Failed to get %s control!\n", rst_name);
++		return;
++	}
++
++	if (how == 0)
++		reset_control_assert(rst);
++	if (how == 1)
++		reset_control_deassert(rst);
++
++	reset_control_put(rst);
++}
++
++static int psgmii_vco_calibrate(struct qca8k_priv *priv, int post_reset_delay)
+ {
+-	struct qca8k_priv *priv = ds->priv;
+ 	int val, ret;
+ 
+ 	if (!priv->psgmii_ethphy) {
+-		dev_err(ds->dev, "PSGMII eth PHY missing, calibration failed!\n");
++		dev_err(priv->dev, "PSGMII eth PHY missing, calibration failed!\n");
+ 		return -ENODEV;
+ 	}
+ 
+ 	/* Fix PSGMII RX 20bit */
+ 	ret = phy_write(priv->psgmii_ethphy, MII_BMCR, 0x5b);
+-	/* Reset PSGMII PHY */
++	/* Freeze PSGMII RX CDR */
++	ret = phy_write(priv->psgmii_ethphy, MII_RESV2, 0x2230);
++
++	/* Reset PHY PSGMII */
+ 	ret = phy_write(priv->psgmii_ethphy, MII_BMCR, 0x1b);
+-	/* Release reset */
+-	ret = phy_write(priv->psgmii_ethphy, MII_BMCR, 0x5b);
++	/* Reset IPQ-40XX PSGMII */
++	ipq_psgmii_do_reset(priv, 0);
+ 
+-	/* Poll for VCO PLL calibration finish */
+-	ret = phy_read_mmd_poll_timeout(priv->psgmii_ethphy,
+-					MDIO_MMD_PMAPMD,
+-					0x28, val,
+-					(val & BIT(0)),
+-					10000, 1000000,
+-					false);
+-	if (ret) {
+-		dev_err(ds->dev, "QCA807x PSGMII VCO calibration PLL not ready\n");
+-		return ret;
++	if (post_reset_delay > 0) {
++		set_current_state(TASK_INTERRUPTIBLE);
++		schedule_timeout(msecs_to_jiffies(post_reset_delay));
+ 	}
+ 
+-	/* Freeze PSGMII RX CDR */
+-	ret = phy_write(priv->psgmii_ethphy, MII_RESV2, 0x2230);
++	/* Release IPQ-40XX PSGMII reset */
++	ipq_psgmii_do_reset(priv, 1);
+ 
+ 	/* Start PSGMIIPHY VCO PLL calibration */
+-	ret = regmap_set_bits(priv->psgmii,
++	/* ret = regmap_set_bits(priv->psgmii,
+ 			PSGMIIPHY_VCO_CALIBRATION_CONTROL_REGISTER_1,
+-			PSGMIIPHY_REG_PLL_VCO_CALIB_RESTART);
++			PSGMIIPHY_REG_PLL_VCO_CALIB_RESTART); */
+ 
+-	/* Poll for PSGMIIPHY PLL calibration finish */
++	/* Poll for PSGMIIPHY PLL calibration finish - Dakota(IPQ40xx) */
+ 	ret = regmap_read_poll_timeout(priv->psgmii,
+ 				       PSGMIIPHY_VCO_CALIBRATION_CONTROL_REGISTER_2,
+ 				       val, val & PSGMIIPHY_REG_PLL_VCO_CALIB_READY,
+ 				       10000, 1000000);
+ 	if (ret) {
+-		dev_err(ds->dev, "PSGMIIPHY VCO calibration PLL not ready\n");
++		dev_err(priv->dev, "IPQ PSGMIIPHY VCO calibration PLL not ready\n");
++		return ret;
++	}
++
++	/* Release PHY PSGMII reset */
++	ret = phy_write(priv->psgmii_ethphy, MII_BMCR, 0x5b);
++	/* Poll for VCO PLL calibration finish - Malibu(QCA8075) */
++	ret = phy_read_mmd_poll_timeout(priv->psgmii_ethphy,
++					MDIO_MMD_PMAPMD,
++					0x28, val,
++					(val & BIT(0)),
++					10000, 1000000,
++					false);
++	if (ret) {
++		dev_err(priv->dev, "QCA807x PSGMII VCO calibration PLL not ready\n");
+ 		return ret;
+ 	}
+ 
+ 	/* Release PSGMII RX CDR */
+ 	ret = phy_write(priv->psgmii_ethphy, MII_RESV2, 0x3230);
+-
+ 	/* Release PSGMII RX 20bit */
+ 	ret = phy_write(priv->psgmii_ethphy, MII_BMCR, 0x5f);
+ 
  	return ret;
  }
  
@@ -23,7 +129,7 @@ diff -rNu a/drivers/net/dsa/qca/qca8k-ipq4019.c b/drivers/net/dsa/qca/qca8k-ipq4
 +	int a;
 +	u16 status;
 +
-+	for (a = 0; a < QCA8K_PSGMII_CALB_NUM; a++) {
++	for (a = 0; a < 100; a++) {
 +		status = phy_read(phy, MII_QCA8075_SSTATUS);
 +		status &= QCA8075_PHY_SPEC_STATUS_LINK;
 +		status = !!status;
@@ -117,9 +223,13 @@ diff -rNu a/drivers/net/dsa/qca/qca8k-ipq4019.c b/drivers/net/dsa/qca/qca8k-ipq4
 +	tx_all_ok = tx_ok + (tx_ok_high16 << 16);
 +	rx_all_ok = rx_ok + (rx_ok_high16 << 16);
 +
-+	if (tx_all_ok != rx_all_ok)
++	/* pr_info("*** phy: %d ***\n", phy->mdio.addr);
++	pr_info("tx_ok: %d, tx_error: %d\n", tx_all_ok, tx_error);
++	pr_info("rx_ok: %d, rx_error: %d\n", rx_all_ok, rx_error); */
++
++	if (tx_all_ok < pkts_num)
 +		return -1;
-+	if(rx_all_ok != pkts_num)
++	if(rx_all_ok < pkts_num)
 +		return -2;
 +	if(tx_error)
 +		return -3;
@@ -192,14 +302,17 @@ diff -rNu a/drivers/net/dsa/qca/qca8k-ipq4019.c b/drivers/net/dsa/qca/qca8k-ipq4
 +
 +static int psgmii_vco_calibrate_and_test(struct dsa_switch *ds)
 +{
-+	int ret, a, test_result;
++	int ret, a, test_result, skip_calibration = 0;
 +	struct qca8k_priv *priv = ds->priv;
 +
 +	for (a = 0; a < QCA8K_PSGMII_CALB_NUM; a++) {
-+		ret = psgmii_vco_calibrate(ds);
-+		if (ret)
-+			return ret;
-+
++		if (skip_calibration) {
++			skip_calibration = 0;
++		} else {
++			ret = psgmii_vco_calibrate(priv, 100);
++			if (ret)
++				return ret;
++		}
 +		test_result = qca8k_do_dsa_sw_ports_self_test(priv);
 +		if (!test_result) {
 +			if (a > 0) {
@@ -209,6 +322,10 @@ diff -rNu a/drivers/net/dsa/qca/qca8k-ipq4019.c b/drivers/net/dsa/qca/qca8k-ipq4
 +			return 0;
 +		} else {
 +			schedule();
++			ret = psgmii_vco_calibrate(priv, 5000);
++			if (ret)
++				return ret;
++			skip_calibration = 1;
 +		}
 +	}
 +
@@ -230,7 +347,7 @@ diff -rNu a/drivers/net/dsa/qca/qca8k-ipq4019.c b/drivers/net/dsa/qca/qca8k-ipq4
  					PSGMIIPHY_MODE_ATHR_CSCO_MODE_25M);
 diff -rNu a/drivers/net/dsa/qca/qca8k-ipq4019.h b/drivers/net/dsa/qca/qca8k-ipq4019.h
 --- a/drivers/net/dsa/qca/qca8k-ipq4019.h	2022-04-11 11:01:21.796045947 +0300
-+++ b/drivers/net/dsa/qca/qca8k-ipq4019.h	2022-04-11 11:05:28.570443443 +0300
++++ b/drivers/net/dsa/qca/qca8k-ipq4019.h	2022-04-14 08:16:11.498360798 +0300
 @@ -150,6 +150,7 @@
  #define   QCA8K_PORT_LOOKUP_STATE_FORWARD		(4 << 16)
  #define   QCA8K_PORT_LOOKUP_STATE			GENMASK(18, 16)
@@ -259,7 +376,7 @@ diff -rNu a/drivers/net/dsa/qca/qca8k-ipq4019.h b/drivers/net/dsa/qca/qca8k-ipq4
 +#define   QCA8075_MMD7_EG_FRAME_RECV_CNT_HI	0x802d
 +#define   QCA8075_MMD7_EG_FRAME_RECV_CNT_LO	0x802e
 +#define   QCA8075_MMD7_EG_FRAME_ERR_CNT			0x802f
-+#define   QCA8K_PSGMII_CALB_NUM							100
++#define   QCA8K_PSGMII_CALB_NUM							10
 +
  enum {
  	QCA8K_PORT_SPEED_10M = 0,
