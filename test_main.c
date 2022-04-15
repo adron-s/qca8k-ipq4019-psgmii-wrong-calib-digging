@@ -120,10 +120,10 @@ qca8k_rmw(struct qca8k_priv *priv, u32 reg, u32 mask, u32 write_val)
 {
 	return regmap_update_bits(priv->regmap, reg, mask, write_val);
 }
-#undef QCA8K_PSGMII_CALB_NUM
-#define	QCA8K_PSGMII_CALB_NUM							1
+//#undef QCA8K_PSGMII_CALB_NUM
+//#define	QCA8K_PSGMII_CALB_NUM							1
 
-//#define	QCA8K_PSGMII_CALB_NUM							100
+#define	QCA8K_PSGMII_CALB_NUM							100
 #define QCA8K_PORT_LOOKUP_LOOPBACK				BIT(21)
 #define	MII_QCA8075_SSTATUS								0x11
 #define QCA8075_PHY_SPEC_STATUS_LINK			BIT(10)
@@ -143,6 +143,7 @@ qca8k_rmw(struct qca8k_priv *priv, u32 reg, u32 mask, u32 write_val)
 #define QCA8075_MMD7_EG_FRAME_ERR_CNT			0x802f
 #define QCA8075_MMD7_MDIO_BRDCST_WRITE		0x8028
 #define QCA8075_MMD7_MDIO_BRDCST_WRITE_EN BIT(15)
+#define QCA8075_MDIO_BRDCST_PHY_ADDR			0x1f
 
 static void qca8k_switch_port_loopback_on_off(
 struct qca8k_priv *priv, int port, int on)
@@ -262,9 +263,11 @@ static void qca8k_start_phy_pkt_gen(struct phy_device *phy)
 static int qca8k_start_all_phys_pkt_gens(struct qca8k_priv *priv)
 {
 	struct phy_device *phy;
-	phy = phy_device_create(priv->bus, 0x1f, 0, 0, NULL);
+	phy = phy_device_create(priv->bus, QCA8075_MDIO_BRDCST_PHY_ADDR,
+		0, 0, NULL);
 	if (!phy) {
-		dev_err(priv->dev, "unable to create mdio broadcast PHY(0x1f)\n");
+		dev_err(priv->dev, "unable to create mdio broadcast PHY(0x%x)\n",
+			QCA8075_MDIO_BRDCST_PHY_ADDR);
 		return -ENODEV;
 	}
 
@@ -331,7 +334,7 @@ struct phy_device *phy, int port, int test_phase)
 	const int test_pkts_num = 4096;
 
 	if (owl == 0) {
-		if (test_phase == 1) { /* start test */
+		if (test_phase == 1) { /* start test preps */
 			qca8k_phy_loopback_on_off(priv, phy, port, 1);
 			qca8k_switch_port_loopback_on_off(priv, port, 1);
 			qca8k_phy_broadcast_write_on_off(priv, phy, 1);
@@ -377,6 +380,7 @@ static int qca8k_do_dsa_sw_ports_self_test(struct qca8k_priv *priv, int parallel
 	struct device_node *phy_dn;
 	struct phy_device *phy;
 	int reg, err = 0, test_phase;
+	u32 tests_result = 0;
 
 	ports = of_get_child_by_name(dn, "ports");
 	if (!ports) {
@@ -388,15 +392,15 @@ static int qca8k_do_dsa_sw_ports_self_test(struct qca8k_priv *priv, int parallel
 		if (parallel_test && test_phase == 2) {
 			err = qca8k_start_all_phys_pkt_gens(priv);
 			if (err)
-				goto out_put_node;
+				goto error;
 		}
 		for_each_available_child_of_node(ports, port) {
 			err = of_property_read_u32(port, "reg", &reg);
 			if (err)
-				goto out_put_node;
+				goto error;
 			if (reg >= QCA8K_NUM_PORTS) {
 				err = -EINVAL;
-				goto out_put_node;
+				goto error;
 			}
 			phy_dn = of_parse_phandle(port, "phy-handle", 0);
 			if (phy_dn) {
@@ -410,10 +414,9 @@ static int qca8k_do_dsa_sw_ports_self_test(struct qca8k_priv *priv, int parallel
 					if (test_phase == 2) {
 						pr_info("port(%d): %s_test_result: %d\n", reg,
 							parallel_test ? "parallel" : "serial", result);
-						if (result) {
-							err = -EFAULT;
-							goto out_put_node;
-						}
+						tests_result <<= 1;
+						if (result)
+							tests_result |= 1;
 					}
 				}
 				of_node_put(phy_dn);
@@ -421,10 +424,13 @@ static int qca8k_do_dsa_sw_ports_self_test(struct qca8k_priv *priv, int parallel
 		}
 	}
 
-out_put_node:
+end:
 	of_node_put(ports);
 	//qca8k_fdb_flush(priv);
-	return err;
+	return tests_result;
+error:
+	tests_result |= 0xf000;
+	goto end;
 }
 
 static void ipq_psgmii_do_reset(struct qca8k_priv *priv, int how)
@@ -550,8 +556,8 @@ static int __init test_m_module_init(void)
 				result = qca8k_do_dsa_sw_ports_self_test(priv, 0); /* serial test */
 				if (!result)
 					result = qca8k_do_dsa_sw_ports_self_test(priv, 1); /* parallel test */
-				pr_info("qca8k dsa_sw_ports post calibration test is %s\n",
-					result ? "FAULT!!!" : "Ok");
+				pr_info("qca8k dsa_sw_ports post calibration test is %s(0x%x)\n",
+					result ? "FAULT!!!" : "Ok", result);
 				if (!result) {
 					if (a > 0) {
 						dev_warn(priv->dev,	"PSGMII work was stabilized after %d "
