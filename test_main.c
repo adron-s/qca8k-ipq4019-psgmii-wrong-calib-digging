@@ -120,8 +120,10 @@ qca8k_rmw(struct qca8k_priv *priv, u32 reg, u32 mask, u32 write_val)
 {
 	return regmap_update_bits(priv->regmap, reg, mask, write_val);
 }
+#undef QCA8K_PSGMII_CALB_NUM
+#define	QCA8K_PSGMII_CALB_NUM							1
 
-#define	QCA8K_PSGMII_CALB_NUM							100
+//#define	QCA8K_PSGMII_CALB_NUM							100
 #define QCA8K_PORT_LOOKUP_LOOPBACK				BIT(21)
 #define	MII_QCA8075_SSTATUS								0x11
 #define QCA8075_PHY_SPEC_STATUS_LINK			BIT(10)
@@ -139,6 +141,8 @@ qca8k_rmw(struct qca8k_priv *priv, u32 reg, u32 mask, u32 write_val)
 #define QCA8075_MMD7_EG_FRAME_RECV_CNT_HI	0x802d
 #define QCA8075_MMD7_EG_FRAME_RECV_CNT_LO	0x802e
 #define QCA8075_MMD7_EG_FRAME_ERR_CNT			0x802f
+#define QCA8075_MMD7_MDIO_BRDCST_WRITE		0x8028
+#define QCA8075_MMD7_MDIO_BRDCST_WRITE_EN BIT(15)
 
 static void qca8k_switch_port_loopback_on_off(
 struct qca8k_priv *priv, int port, int on)
@@ -209,11 +213,10 @@ struct phy_device *phy, int sw_port, int on)
 	}
 }
 
-static void qca8k_phy_pkt_gen_on_off(struct qca8k_priv *priv,
+static void qca8k_phy_pkt_gen_prep(struct qca8k_priv *priv,
 struct phy_device *phy, int pkts_num, int on)
 {
 	if (on) {
-		int val;
 		/* Enable CRC checker and packets counters */
 		phy_write_mmd(phy, 7, QCA8075_MMD7_CRC_AND_PKTS_COUNT,
 			0x0000);
@@ -224,14 +227,7 @@ struct phy_device *phy, int pkts_num, int on)
 		phy_write_mmd(phy, 7, QCA8075_MMD7_PKT_GEN_PKT_NUMB, pkts_num);
 		/* pkt size - 1504 bytes + 20 bytes */
 		phy_write_mmd(phy, 7, QCA8075_MMD7_PKT_GEN_PKT_SIZE, 1504);
-		/* start traffic gen */
-		phy_write_mmd(phy, 7, QCA8075_MMD7_PKT_GEN_CTRL,
-			QCA8075_MMD7_PKT_GEN_START | QCA8075_MMD7_PKT_GEN_INPROGR);
-		/* wait for all traffic end: 4096(pkt num)*1524(size)*8ns(125MHz)=49938us */
-		phy_read_mmd_poll_timeout(phy, 7,	QCA8075_MMD7_PKT_GEN_CTRL,
-			val, !(val & QCA8075_MMD7_PKT_GEN_INPROGR),
-			50000, 1000000,	true);
-	  pr_info("phy(%d) pkt gen is ON\n", phy->mdio.addr);
+	  pr_info("phy(%02x) pkt gen is ready to launch\n", phy->mdio.addr);
 	} else { /* off */
 		/* packet number */
 		phy_write_mmd(phy, 7, QCA8075_MMD7_PKT_GEN_PKT_NUMB, 0x0);
@@ -239,8 +235,43 @@ struct phy_device *phy, int pkts_num, int on)
 		phy_write_mmd(phy, 7, QCA8075_MMD7_CRC_AND_PKTS_COUNT, 0x0);
 		/* disable traffic gen */
 		phy_write_mmd(phy, 7, QCA8075_MMD7_PKT_GEN_CTRL, 0x0);
-		pr_info("phy(%d) pkt gen is OFF\n", phy->mdio.addr);
+		pr_info("phy(%02x) pkt gen is OFF\n", phy->mdio.addr);
 	}
+}
+
+static void qca8k_wait_for_phy_pkt_gen_fin(struct qca8k_priv *priv,
+struct phy_device *phy)
+{
+	int val;
+	pr_info("phy(%02x): waiting for traffic end ...\n", phy->mdio.addr);
+		/* wait for all traffic end: 4096(pkt num)*1524(size)*8ns(125MHz)=49938us */
+	phy_read_mmd_poll_timeout(phy, 7,	QCA8075_MMD7_PKT_GEN_CTRL,
+		val, !(val & QCA8075_MMD7_PKT_GEN_INPROGR),
+		50000, 1000000,	true);
+	pr_info("phy(%02x): traffic is end\n", phy->mdio.addr);
+}
+
+static void qca8k_start_phy_pkt_gen(struct phy_device *phy)
+{
+	pr_info("phy(%x): start pkt_gen\n", phy->mdio.addr);
+	/* start traffic gen */
+	phy_write_mmd(phy, 7, QCA8075_MMD7_PKT_GEN_CTRL,
+		QCA8075_MMD7_PKT_GEN_START | QCA8075_MMD7_PKT_GEN_INPROGR);
+}
+
+static int qca8k_start_all_phys_pkt_gens(struct qca8k_priv *priv)
+{
+	struct phy_device *phy;
+	phy = phy_device_create(priv->bus, 0x1f, 0, 0, NULL);
+	if (!phy) {
+		dev_err(priv->dev, "unable to create mdio broadcast PHY(0x1f)\n");
+		return -ENODEV;
+	}
+
+	qca8k_start_phy_pkt_gen(phy);
+
+	phy_device_free(phy);
+	return 0;
 }
 
 static int qca8k_get_phy_pkt_gen_test_result(
@@ -277,54 +308,75 @@ struct phy_device *phy, int pkts_num)
 	return 0; /* test is ok */
 }
 
+static void qca8k_phy_broadcast_write_on_off(struct qca8k_priv *priv,
+struct phy_device *phy, int on)
+{
+	u32 val;
+
+	val = phy_read_mmd(phy, 7, QCA8075_MMD7_MDIO_BRDCST_WRITE);
+
+	if (on == 0)
+		val &= ~QCA8075_MMD7_MDIO_BRDCST_WRITE_EN;
+	else
+		val |= QCA8075_MMD7_MDIO_BRDCST_WRITE_EN;
+
+	pr_info("phy(%02x): mdio brdcst write = 0x%04x\n", phy->mdio.addr, val);
+	phy_write_mmd(phy, 7, QCA8075_MMD7_MDIO_BRDCST_WRITE, val);
+}
+
 static int qca8k_test_dsa_port_for_errors(struct qca8k_priv *priv,
-struct phy_device *phy, int port)
+struct phy_device *phy, int port, int test_phase)
 {
 	int res = 0;
 	const int test_pkts_num = 4096;
 
 	if (owl == 0) {
-		qca8k_phy_loopback_on_off(priv, phy, port, 1);
-		qca8k_switch_port_loopback_on_off(priv, port, 1);
-		qca8k_phy_pkt_gen_on_off(priv, phy, test_pkts_num, 1);
-		if (phy->mdio.addr == 2) {
-			int val = 0;
-			if (!regmap_read(priv->psgmii, 0x1f0, &val))
-				pr_info("ipq psgmii reg 0x1f0: 0x%x\n", val);
+		if (test_phase == 1) { /* start test */
+			qca8k_phy_loopback_on_off(priv, phy, port, 1);
+			qca8k_switch_port_loopback_on_off(priv, port, 1);
+			qca8k_phy_broadcast_write_on_off(priv, phy, 1);
+			qca8k_phy_pkt_gen_prep(priv, phy, test_pkts_num, 1);
+		} else if (test_phase == 2) {
+			/* wait for test results, collect it and cleanup */
+			qca8k_wait_for_phy_pkt_gen_fin(priv, phy);
+			res = qca8k_get_phy_pkt_gen_test_result(phy, test_pkts_num);
+			qca8k_phy_pkt_gen_prep(priv, phy, test_pkts_num, 0);
+			qca8k_phy_broadcast_write_on_off(priv, phy, 0);
+			qca8k_switch_port_loopback_on_off(priv, port, 0);
+			qca8k_phy_loopback_on_off(priv, phy, port, 0);
 		}
-		res = qca8k_get_phy_pkt_gen_test_result(phy, test_pkts_num);
+	}
 
-		qca8k_phy_pkt_gen_on_off(priv, phy, test_pkts_num, 0);
-		qca8k_switch_port_loopback_on_off(priv, port, 0);
-		qca8k_phy_loopback_on_off(priv, phy, port, 0);
+	if (test_phase == 1) {
+		if (owl == 500) {
+			/* Enable CRC checker and packets counters */
+			phy_write_mmd(phy, 7, QCA8075_MMD7_CRC_AND_PKTS_COUNT,
+				0x0000);
+			phy_write_mmd(phy, 7, QCA8075_MMD7_CRC_AND_PKTS_COUNT,
+				QCA8075_MMD7_CNT_FRAME_CHK_EN | QCA8075_MMD7_CNT_SELFCLR);
+		}
+		if (owl == 501) {
+			qca8k_get_phy_pkt_gen_test_result(phy, 0);
+		}
+		if (owl == 502) {
+			//phy_modify(phy, MII_BMCR, BMCR_PDOWN, BMCR_PDOWN);
+			//phy_write(phy, MII_BMCR, BMCR_ANENABLE | BMCR_RESET);
+			qca8k_phy_pkt_gen_prep(priv, phy, test_pkts_num, 1);
+			qca8k_get_phy_pkt_gen_test_result(phy, 0);
+			qca8k_phy_pkt_gen_prep(priv, phy, test_pkts_num, 0);
+		}
 	}
-	if (owl == 500) {
-		/* Enable CRC checker and packets counters */
-		phy_write_mmd(phy, 7, QCA8075_MMD7_CRC_AND_PKTS_COUNT,
-			0x0000);
-		phy_write_mmd(phy, 7, QCA8075_MMD7_CRC_AND_PKTS_COUNT,
-			QCA8075_MMD7_CNT_FRAME_CHK_EN | QCA8075_MMD7_CNT_SELFCLR);
-	}
-	if (owl == 501) {
-		qca8k_get_phy_pkt_gen_test_result(phy, 0);
-	}
-	if (owl == 502) {
-		//phy_modify(phy, MII_BMCR, BMCR_PDOWN, BMCR_PDOWN);
-		//phy_write(phy, MII_BMCR, BMCR_ANENABLE | BMCR_RESET);
-		qca8k_phy_pkt_gen_on_off(priv, phy, test_pkts_num, 1);
-		qca8k_get_phy_pkt_gen_test_result(phy, 0);
-		qca8k_phy_pkt_gen_on_off(priv, phy, test_pkts_num, 0);
-	}
+
 	return res;
 }
 
-static int qca8k_do_dsa_sw_ports_self_test(struct qca8k_priv *priv)
+static int qca8k_do_dsa_sw_ports_self_test(struct qca8k_priv *priv, int parallel_test)
 {
 	struct device_node *dn = priv->dev->of_node;
 	struct device_node *ports, *port;
 	struct device_node *phy_dn;
-	struct phy_device *phydev;
-	int reg, err = 0;
+	struct phy_device *phy;
+	int reg, err = 0, test_phase;
 
 	ports = of_get_child_by_name(dn, "ports");
 	if (!ports) {
@@ -332,28 +384,40 @@ static int qca8k_do_dsa_sw_ports_self_test(struct qca8k_priv *priv)
 			return -EINVAL;
 	}
 
-	for_each_available_child_of_node(ports, port) {
-		err = of_property_read_u32(port, "reg", &reg);
-		if (err)
-			goto out_put_node;
-		if (reg >= QCA8K_NUM_PORTS) {
-			err = -EINVAL;
-			goto out_put_node;
+	for (test_phase = 1; test_phase <= 2; test_phase++) {
+		if (parallel_test && test_phase == 2) {
+			err = qca8k_start_all_phys_pkt_gens(priv);
+			if (err)
+				goto out_put_node;
 		}
-		phy_dn = of_parse_phandle(port, "phy-handle", 0);
-		if (phy_dn) {
-			phydev = of_phy_find_device(phy_dn);
-			if (phydev) {
-				int result;
-				result = qca8k_test_dsa_port_for_errors(priv, phydev, reg);
-				pr_info("port(%d): test_result: %d\n", reg, result);
-				put_device(&phydev->mdio.dev);
-				if (result) {
-					err = -EFAULT;
-					goto out_put_node;
-				}
+		for_each_available_child_of_node(ports, port) {
+			err = of_property_read_u32(port, "reg", &reg);
+			if (err)
+				goto out_put_node;
+			if (reg >= QCA8K_NUM_PORTS) {
+				err = -EINVAL;
+				goto out_put_node;
 			}
-			of_node_put(phy_dn);
+			phy_dn = of_parse_phandle(port, "phy-handle", 0);
+			if (phy_dn) {
+				phy = of_phy_find_device(phy_dn);
+				if (phy) {
+					int result;
+					result = qca8k_test_dsa_port_for_errors(priv, phy, reg, test_phase);
+					if (!parallel_test && test_phase == 1)
+						qca8k_start_phy_pkt_gen(phy);
+					put_device(&phy->mdio.dev);
+					if (test_phase == 2) {
+						pr_info("port(%d): %s_test_result: %d\n", reg,
+							parallel_test ? "parallel" : "serial", result);
+						if (result) {
+							err = -EFAULT;
+							goto out_put_node;
+						}
+					}
+				}
+				of_node_put(phy_dn);
+			}
 		}
 	}
 
@@ -483,7 +547,9 @@ static int __init test_m_module_init(void)
 			for (a = 0; a <= QCA8K_PSGMII_CALB_NUM; a++) {
 				pr_info("Doing QCA8075 and PSGMII calibration\n");
 				psgmii_vco_calibrate(priv);
-				result = qca8k_do_dsa_sw_ports_self_test(priv);
+				result = qca8k_do_dsa_sw_ports_self_test(priv, 0); /* serial test */
+				if (!result)
+					result = qca8k_do_dsa_sw_ports_self_test(priv, 1); /* parallel test */
 				pr_info("qca8k dsa_sw_ports post calibration test is %s\n",
 					result ? "FAULT!!!" : "Ok");
 				if (!result) {
@@ -515,6 +581,8 @@ static int __init test_m_module_init(void)
 			ipq_psgmii_do_reset(priv, yyy - 210);
 		if (yyy == 212)
 			ipq_psgmii_do_reset(priv, 100);
+		if (yyy == 220)
+			qca8k_start_all_phys_pkt_gens(priv);
 		if (yyy == 300 || yyy == 301) {
 			u32 __iomem *reg;
 			reg = ioremap(0x1812008, 4);
