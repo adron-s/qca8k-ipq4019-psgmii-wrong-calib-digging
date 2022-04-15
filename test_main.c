@@ -405,6 +405,7 @@ static int qca8k_do_dsa_sw_ports_self_test(struct qca8k_priv *priv, int parallel
 			phy_dn = of_parse_phandle(port, "phy-handle", 0);
 			if (phy_dn) {
 				phy = of_phy_find_device(phy_dn);
+				of_node_put(phy_dn);
 				if (phy) {
 					int result;
 					result = qca8k_test_dsa_port_for_errors(priv, phy, reg, test_phase);
@@ -419,7 +420,6 @@ static int qca8k_do_dsa_sw_ports_self_test(struct qca8k_priv *priv, int parallel
 							tests_result |= 1;
 					}
 				}
-				of_node_put(phy_dn);
 			}
 		}
 	}
