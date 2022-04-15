@@ -46,33 +46,7 @@ static int owl_phy = -1;
 module_param(owl_phy, int, 0);
 MODULE_PARM_DESC(owl_phy, "phy for override default value");
 
-static void ipq_psgmii_do_reset(struct qca8k_priv *priv, int how)
-{
-	struct reset_control *rst;
-	const char rst_name[ ] = "psgmii_rst";
-	rst = devm_reset_control_get(priv->dev, rst_name);
-	if (IS_ERR(rst)) {
-		dev_err(priv->dev, "Failed to get %s control!\n", rst_name);
-		return;
-	}
-
-	if (how == 0 || how >= 10) {
-		pr_info("Doing %s assert\n", rst_name);
-		reset_control_assert(rst);
-	}
-	if (how >= 10) {
-		set_current_state(TASK_INTERRUPTIBLE);
-		schedule_timeout(msecs_to_jiffies(100 * how));
-	}
-	if (how == 1 || how >= 10) {
-		reset_control_deassert(rst);
-		pr_info("Doing %s deassert\n", rst_name);
-	}
-
-	reset_control_put(rst);
-}
-
-static int psgmii_vco_calibrate(struct qca8k_priv *priv, int post_reset_delay)
+static int psgmii_vco_calibrate(struct qca8k_priv *priv)
 {
 	int val, ret;
 
@@ -83,39 +57,11 @@ static int psgmii_vco_calibrate(struct qca8k_priv *priv, int post_reset_delay)
 
 	/* Fix PSGMII RX 20bit */
 	ret = phy_write(priv->psgmii_ethphy, MII_BMCR, 0x5b);
-	/* Freeze PSGMII RX CDR */
-	ret = phy_write(priv->psgmii_ethphy, MII_RESV2, 0x2230);
-
 	/* Reset PHY PSGMII */
 	ret = phy_write(priv->psgmii_ethphy, MII_BMCR, 0x1b);
-	/* Reset IPQ-40XX PSGMII */
-	ipq_psgmii_do_reset(priv, 0);
-
-	if (post_reset_delay > 0) {
-		set_current_state(TASK_INTERRUPTIBLE);
-		schedule_timeout(msecs_to_jiffies(post_reset_delay));
-	}
-
-	/* Release IPQ-40XX PSGMII reset */
-	ipq_psgmii_do_reset(priv, 1);
-
-	/* Start PSGMIIPHY VCO PLL calibration */
-	/* ret = regmap_set_bits(priv->psgmii,
-			PSGMIIPHY_VCO_CALIBRATION_CONTROL_REGISTER_1,
-			PSGMIIPHY_REG_PLL_VCO_CALIB_RESTART); */
-
-	/* Poll for PSGMIIPHY PLL calibration finish - Dakota(IPQ40xx) */
-	ret = regmap_read_poll_timeout(priv->psgmii,
-				       PSGMIIPHY_VCO_CALIBRATION_CONTROL_REGISTER_2,
-				       val, val & PSGMIIPHY_REG_PLL_VCO_CALIB_READY,
-				       10000, 1000000);
-	if (ret) {
-		dev_err(priv->dev, "IPQ PSGMIIPHY VCO calibration PLL not ready\n");
-		return ret;
-	}
-
 	/* Release PHY PSGMII reset */
 	ret = phy_write(priv->psgmii_ethphy, MII_BMCR, 0x5b);
+
 	/* Poll for VCO PLL calibration finish - Malibu(QCA8075) */
 	ret = phy_read_mmd_poll_timeout(priv->psgmii_ethphy,
 					MDIO_MMD_PMAPMD,
@@ -127,11 +73,32 @@ static int psgmii_vco_calibrate(struct qca8k_priv *priv, int post_reset_delay)
 		dev_err(priv->dev, "QCA807x PSGMII VCO calibration PLL not ready\n");
 		return ret;
 	}
+	mdelay(50);
+
+	/* Freeze PSGMII RX CDR */
+	ret = phy_write(priv->psgmii_ethphy, MII_RESV2, 0x2230);
+
+	/* Start PSGMIIPHY VCO PLL calibration */
+	ret = regmap_set_bits(priv->psgmii,
+			PSGMIIPHY_VCO_CALIBRATION_CONTROL_REGISTER_1,
+			PSGMIIPHY_REG_PLL_VCO_CALIB_RESTART);
+
+	/* Poll for PSGMIIPHY PLL calibration finish - Dakota(IPQ40xx) */
+	ret = regmap_read_poll_timeout(priv->psgmii,
+				       PSGMIIPHY_VCO_CALIBRATION_CONTROL_REGISTER_2,
+				       val, val & PSGMIIPHY_REG_PLL_VCO_CALIB_READY,
+				       10000, 1000000);
+	if (ret) {
+		dev_err(priv->dev, "IPQ PSGMIIPHY VCO calibration PLL not ready\n");
+		return ret;
+	}
+	mdelay(50);
 
 	/* Release PSGMII RX CDR */
 	ret = phy_write(priv->psgmii_ethphy, MII_RESV2, 0x3230);
 	/* Release PSGMII RX 20bit */
 	ret = phy_write(priv->psgmii_ethphy, MII_BMCR, 0x5f);
+	mdelay(200);
 
 	return ret;
 }
@@ -396,6 +363,42 @@ out_put_node:
 	return err;
 }
 
+static void ipq_psgmii_do_reset(struct qca8k_priv *priv, int how)
+{
+	struct reset_control *rst;
+	const char rst_name[ ] = "psgmii_rst";
+	rst = devm_reset_control_get(priv->dev, rst_name);
+	if (IS_ERR(rst)) {
+		dev_err(priv->dev, "Failed to get %s control!\n", rst_name);
+		return;
+	}
+
+	if (how == 0 || how >= 10) {
+		pr_info("Doing %s assert\n", rst_name);
+		/* Fix PSGMII RX 20bit */
+		phy_write(priv->psgmii_ethphy, MII_BMCR, 0x5b);
+		/* Freeze PSGMII RX CDR */
+		phy_write(priv->psgmii_ethphy, MII_RESV2, 0x2230);
+		mdelay(50);
+		reset_control_assert(rst);
+	}
+	if (how >= 10) {
+		set_current_state(TASK_INTERRUPTIBLE);
+		schedule_timeout(msecs_to_jiffies(100 * how));
+	}
+	if (how == 1 || how >= 10) {
+		reset_control_deassert(rst);
+		pr_info("Doing %s deassert\n", rst_name);
+		/* Release PSGMII RX CDR */
+		phy_write(priv->psgmii_ethphy, MII_RESV2, 0x3230);
+		/* Release PSGMII RX 20bit */
+		phy_write(priv->psgmii_ethphy, MII_BMCR, 0x5f);
+		mdelay(200);
+	}
+
+	reset_control_put(rst);
+}
+
 static void *get_priv_from_if_name(const char *dev_name)
 {
 	struct net_device *dev;
@@ -433,7 +436,7 @@ static int __init test_m_module_init(void)
 		pr_info("phy: 0x%x, phy_id: %08x\n", (unsigned int)phy, phy->phy_id);
 		pr_info("mii_bus: 0x%x, bus->name: %s\n", (unsigned int)bus, bus->name);
 		pr_info("Doing PSGMII PHYs calibration\n");
-		psgmii_vco_calibrate(priv, 100);
+		psgmii_vco_calibrate(priv);
 		pr_info("Calibration is DONE\n");
 	}
 	if (0) {
@@ -461,7 +464,7 @@ static int __init test_m_module_init(void)
 				bus->write(bus, phy_addr, MII_BMCR, bmcr);
 			} */
 		}
-		//psgmii_vco_calibrate(priv, 100);
+		//psgmii_vco_calibrate(priv);
 	}
 
 	if (yyy == 189) {
@@ -479,7 +482,7 @@ static int __init test_m_module_init(void)
 			int a, result;
 			for (a = 0; a <= QCA8K_PSGMII_CALB_NUM; a++) {
 				pr_info("Doing QCA8075 and PSGMII calibration\n");
-				psgmii_vco_calibrate(priv, 100);
+				psgmii_vco_calibrate(priv);
 				result = qca8k_do_dsa_sw_ports_self_test(priv);
 				pr_info("qca8k dsa_sw_ports post calibration test is %s\n",
 					result ? "FAULT!!!" : "Ok");
@@ -492,7 +495,7 @@ static int __init test_m_module_init(void)
 				} else {
 					schedule();
 					if (a > 0 && a % 10 == 0) {
-						ipq_psgmii_do_reset(priv, 100);
+						ipq_psgmii_do_reset(priv, a);
 						set_current_state(TASK_INTERRUPTIBLE);
 						schedule_timeout(msecs_to_jiffies(a * 100));
 					}
@@ -512,6 +515,15 @@ static int __init test_m_module_init(void)
 			ipq_psgmii_do_reset(priv, yyy - 210);
 		if (yyy == 212)
 			ipq_psgmii_do_reset(priv, 100);
+		if (yyy == 300 || yyy == 301) {
+			u32 __iomem *reg;
+			reg = ioremap(0x1812008, 4);
+			if (reg) {
+				*reg = yyy - 300;
+				pr_info("0x1812008 val: 0x%x\n", *reg);
+			}
+			iounmap(reg);
+		}
 	}
 
 	return -ENOMEM;

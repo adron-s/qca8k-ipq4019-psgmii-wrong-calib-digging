@@ -612,32 +612,7 @@ qca8k_setup(struct dsa_switch *ds)
 	return 0;
 }
 
-static void ipq_psgmii_do_reset(struct qca8k_priv *priv, int how)
-{
-	struct reset_control *rst;
-	const char rst_name[ ] = "psgmii_rst";
-	rst = devm_reset_control_get(priv->dev, rst_name);
-	if (IS_ERR(rst)) {
-		dev_err(priv->dev, "Failed to get %s control!\n", rst_name);
-		return;
-	}
-
-	if (how == 0 || how >= 10) {
-		reset_control_assert(rst);
-	}
-	if (how >= 10) {
-		set_current_state(TASK_INTERRUPTIBLE);
-		schedule_timeout(msecs_to_jiffies(100 * how));
-	}
-	if (how == 1 || how >= 10) {
-		reset_control_deassert(rst);
-	}
-
-	reset_control_put(rst);
-}
-
-
-static int psgmii_vco_calibrate(struct qca8k_priv *priv, int post_reset_delay)
+static int psgmii_vco_calibrate(struct qca8k_priv *priv)
 {
 	int val, ret;
 
@@ -648,39 +623,11 @@ static int psgmii_vco_calibrate(struct qca8k_priv *priv, int post_reset_delay)
 
 	/* Fix PSGMII RX 20bit */
 	ret = phy_write(priv->psgmii_ethphy, MII_BMCR, 0x5b);
-	/* Freeze PSGMII RX CDR */
-	ret = phy_write(priv->psgmii_ethphy, MII_RESV2, 0x2230);
-
 	/* Reset PHY PSGMII */
 	ret = phy_write(priv->psgmii_ethphy, MII_BMCR, 0x1b);
-	/* Reset IPQ-40XX PSGMII */
-	ipq_psgmii_do_reset(priv, 0);
-
-	if (post_reset_delay > 0) {
-		set_current_state(TASK_INTERRUPTIBLE);
-		schedule_timeout(msecs_to_jiffies(post_reset_delay));
-	}
-
-	/* Release IPQ-40XX PSGMII reset */
-	ipq_psgmii_do_reset(priv, 1);
-
-	/* Start PSGMIIPHY VCO PLL calibration */
-	/* ret = regmap_set_bits(priv->psgmii,
-			PSGMIIPHY_VCO_CALIBRATION_CONTROL_REGISTER_1,
-			PSGMIIPHY_REG_PLL_VCO_CALIB_RESTART); */
-
-	/* Poll for PSGMIIPHY PLL calibration finish - Dakota(IPQ40xx) */
-	ret = regmap_read_poll_timeout(priv->psgmii,
-				       PSGMIIPHY_VCO_CALIBRATION_CONTROL_REGISTER_2,
-				       val, val & PSGMIIPHY_REG_PLL_VCO_CALIB_READY,
-				       10000, 1000000);
-	if (ret) {
-		dev_err(priv->dev, "IPQ PSGMIIPHY VCO calibration PLL not ready\n");
-		return ret;
-	}
-
 	/* Release PHY PSGMII reset */
 	ret = phy_write(priv->psgmii_ethphy, MII_BMCR, 0x5b);
+
 	/* Poll for VCO PLL calibration finish - Malibu(QCA8075) */
 	ret = phy_read_mmd_poll_timeout(priv->psgmii_ethphy,
 					MDIO_MMD_PMAPMD,
@@ -692,11 +639,32 @@ static int psgmii_vco_calibrate(struct qca8k_priv *priv, int post_reset_delay)
 		dev_err(priv->dev, "QCA807x PSGMII VCO calibration PLL not ready\n");
 		return ret;
 	}
+	mdelay(50);
+
+	/* Freeze PSGMII RX CDR */
+	ret = phy_write(priv->psgmii_ethphy, MII_RESV2, 0x2230);
+
+	/* Start PSGMIIPHY VCO PLL calibration */
+	ret = regmap_set_bits(priv->psgmii,
+			PSGMIIPHY_VCO_CALIBRATION_CONTROL_REGISTER_1,
+			PSGMIIPHY_REG_PLL_VCO_CALIB_RESTART);
+
+	/* Poll for PSGMIIPHY PLL calibration finish - Dakota(IPQ40xx) */
+	ret = regmap_read_poll_timeout(priv->psgmii,
+				       PSGMIIPHY_VCO_CALIBRATION_CONTROL_REGISTER_2,
+				       val, val & PSGMIIPHY_REG_PLL_VCO_CALIB_READY,
+				       10000, 1000000);
+	if (ret) {
+		dev_err(priv->dev, "IPQ PSGMIIPHY VCO calibration PLL not ready\n");
+		return ret;
+	}
+	mdelay(50);
 
 	/* Release PSGMII RX CDR */
 	ret = phy_write(priv->psgmii_ethphy, MII_RESV2, 0x3230);
 	/* Release PSGMII RX 20bit */
 	ret = phy_write(priv->psgmii_ethphy, MII_BMCR, 0x5f);
+	mdelay(200);
 
 	return ret;
 }
@@ -890,13 +858,37 @@ out_put_node:
 	return err;
 }
 
+static void ipq_psgmii_do_reset(struct qca8k_priv *priv, int how)
+{
+	struct reset_control *rst;
+	const char rst_name[ ] = "psgmii_rst";
+	rst = devm_reset_control_get(priv->dev, rst_name);
+	if (IS_ERR(rst)) {
+		dev_err(priv->dev, "Failed to get %s control!\n", rst_name);
+		return;
+	}
+
+	if (how == 0 || how >= 10) {
+		reset_control_assert(rst);
+	}
+	if (how >= 10) {
+		set_current_state(TASK_INTERRUPTIBLE);
+		schedule_timeout(msecs_to_jiffies(100 * how));
+	}
+	if (how == 1 || how >= 10) {
+		reset_control_deassert(rst);
+	}
+
+	reset_control_put(rst);
+}
+
 static int psgmii_vco_calibrate_and_test(struct dsa_switch *ds)
 {
 	int ret, a, test_result;
 	struct qca8k_priv *priv = ds->priv;
 
 	for (a = 0; a <= QCA8K_PSGMII_CALB_NUM; a++) {
-		ret = psgmii_vco_calibrate(priv, 100);
+		ret = psgmii_vco_calibrate(priv);
 		if (ret)
 			return ret;
 		test_result = qca8k_do_dsa_sw_ports_self_test(priv);
