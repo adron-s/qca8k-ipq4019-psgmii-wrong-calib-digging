@@ -103,6 +103,11 @@ static int psgmii_vco_calibrate(struct qca8k_priv *priv)
 	return ret;
 }
 
+static void qca8k_fdb_flush(struct qca8k_priv *priv)
+{
+	/* here is just a stub and nothing more */
+}
+
 static int
 qca8k_read(struct qca8k_priv *priv, u32 reg, u32 *val)
 {
@@ -218,7 +223,7 @@ static void qca8k_phy_pkt_gen_prep(struct qca8k_priv *priv,
 struct phy_device *phy, int pkts_num, int on)
 {
 	if (on) {
-		/* Enable CRC checker and packets counters */
+		/* enable CRC checker and packets counters */
 		phy_write_mmd(phy, 7, QCA8075_MMD7_CRC_AND_PKTS_COUNT,
 			0x0000);
 		phy_write_mmd(phy, 7, QCA8075_MMD7_CRC_AND_PKTS_COUNT,
@@ -373,7 +378,8 @@ struct phy_device *phy, int port, int test_phase)
 	return res;
 }
 
-static int qca8k_do_dsa_sw_ports_self_test(struct qca8k_priv *priv, int parallel_test)
+static int qca8k_do_dsa_sw_ports_self_test(struct qca8k_priv *priv,
+int parallel_test)
 {
 	struct device_node *dn = priv->dev->of_node;
 	struct device_node *ports, *port;
@@ -408,7 +414,8 @@ static int qca8k_do_dsa_sw_ports_self_test(struct qca8k_priv *priv, int parallel
 				of_node_put(phy_dn);
 				if (phy) {
 					int result;
-					result = qca8k_test_dsa_port_for_errors(priv, phy, reg, test_phase);
+					result = qca8k_test_dsa_port_for_errors(priv,
+						phy, reg, test_phase);
 					if (!parallel_test && test_phase == 1)
 						qca8k_start_phy_pkt_gen(phy);
 					put_device(&phy->mdio.dev);
@@ -426,7 +433,7 @@ static int qca8k_do_dsa_sw_ports_self_test(struct qca8k_priv *priv, int parallel
 
 end:
 	of_node_put(ports);
-	//qca8k_fdb_flush(priv);
+	qca8k_fdb_flush(priv);
 	return tests_result;
 error:
 	tests_result |= 0xf000;
@@ -437,6 +444,7 @@ static void ipq_psgmii_do_reset(struct qca8k_priv *priv, int how)
 {
 	struct reset_control *rst;
 	const char rst_name[ ] = "psgmii_rst";
+
 	rst = devm_reset_control_get(priv->dev, rst_name);
 	if (IS_ERR(rst)) {
 		dev_err(priv->dev, "Failed to get %s control!\n", rst_name);
@@ -452,13 +460,16 @@ static void ipq_psgmii_do_reset(struct qca8k_priv *priv, int how)
 		mdelay(50);
 		reset_control_assert(rst);
 	}
+
 	if (how >= 10) {
 		set_current_state(TASK_INTERRUPTIBLE);
 		schedule_timeout(msecs_to_jiffies(100 * how));
 	}
+
 	if (how == 1 || how >= 10) {
 		reset_control_deassert(rst);
 		pr_info("Doing %s deassert\n", rst_name);
+		mdelay(50);
 		/* Release PSGMII RX CDR */
 		phy_write(priv->psgmii_ethphy, MII_RESV2, 0x3230);
 		/* Release PSGMII RX 20bit */
@@ -553,9 +564,10 @@ static int __init test_m_module_init(void)
 			for (a = 0; a <= QCA8K_PSGMII_CALB_NUM; a++) {
 				pr_info("Doing QCA8075 and PSGMII calibration\n");
 				psgmii_vco_calibrate(priv);
-				result = qca8k_do_dsa_sw_ports_self_test(priv, 0); /* serial test */
-				if (!result)
-					result = qca8k_do_dsa_sw_ports_self_test(priv, 1); /* parallel test */
+				/* first we run serial test */
+				result = qca8k_do_dsa_sw_ports_self_test(priv, 0);
+				if (!result) /* and if it is ok then we run the test in parallel */
+					result = qca8k_do_dsa_sw_ports_self_test(priv, 1);
 				pr_info("qca8k dsa_sw_ports post calibration test is %s(0x%x)\n",
 					result ? "FAULT!!!" : "Ok", result);
 				if (!result) {
