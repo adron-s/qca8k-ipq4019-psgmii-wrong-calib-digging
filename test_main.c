@@ -291,7 +291,7 @@ struct phy_device *phy, int pkts_num)
 	u32 rx_ok_high16;
 	u32 tx_all_ok, rx_all_ok;
 
-	/* check counter */
+	/* check counters */
 	tx_ok = phy_read_mmd(phy, 7, QCA8075_MMD7_EG_FRAME_RECV_CNT_LO);
 	tx_ok_high16 = phy_read_mmd(phy, 7, QCA8075_MMD7_EG_FRAME_RECV_CNT_HI);
 	tx_error = phy_read_mmd(phy, 7, QCA8075_MMD7_EG_FRAME_ERR_CNT);
