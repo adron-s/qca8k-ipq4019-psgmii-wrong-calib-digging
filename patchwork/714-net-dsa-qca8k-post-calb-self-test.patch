@@ -1,6 +1,6 @@
 diff -rNu a/drivers/net/dsa/qca/qca8k-ipq4019.c b/drivers/net/dsa/qca/qca8k-ipq4019.c
 --- a/drivers/net/dsa/qca/qca8k-ipq4019.c	2022-04-11 11:01:21.796045947 +0300
-+++ b/drivers/net/dsa/qca/qca8k-ipq4019.c	2022-04-16 08:36:43.534263230 +0300
++++ b/drivers/net/dsa/qca/qca8k-ipq4019.c	2022-04-17 09:07:04.693210066 +0300
 @@ -612,24 +612,23 @@
  	return 0;
  }
@@ -43,7 +43,7 @@ diff -rNu a/drivers/net/dsa/qca/qca8k-ipq4019.c b/drivers/net/dsa/qca/qca8k-ipq4
  
  	/* Freeze PSGMII RX CDR */
  	ret = phy_write(priv->psgmii_ethphy, MII_RESV2, 0x2230);
-@@ -649,32 +649,359 @@
+@@ -649,32 +649,322 @@
  			PSGMIIPHY_VCO_CALIBRATION_CONTROL_REGISTER_1,
  			PSGMIIPHY_REG_PLL_VCO_CALIB_RESTART);
  
@@ -241,7 +241,7 @@ diff -rNu a/drivers/net/dsa/qca/qca8k-ipq4019.c b/drivers/net/dsa/qca/qca8k-ipq4
 +struct phy_device *phy, int port, int test_phase)
 +{
 +	int res = 0;
-+	const int test_pkts_num = 4096;
++	const int test_pkts_num = QCA8075_PKT_GEN_PKTS_COUNT;
 +
 +	if (test_phase == 1) { /* start test preps */
 +		qca8k_phy_loopback_on_off(priv, phy, port, 1);
@@ -321,44 +321,6 @@ diff -rNu a/drivers/net/dsa/qca/qca8k-ipq4019.c b/drivers/net/dsa/qca/qca8k-ipq4
 +	goto end;
 +}
 +
-+static void ipq_psgmii_do_reset(struct qca8k_priv *priv, int how)
-+{
-+	struct reset_control *rst;
-+	const char rst_name[ ] = "psgmii_rst";
-+
-+	rst = devm_reset_control_get(priv->dev, rst_name);
-+	if (IS_ERR(rst)) {
-+		dev_err(priv->dev, "Failed to get %s control!\n", rst_name);
-+		return;
-+	}
-+
-+	if (how == 0 || how >= 10) {
-+		/* Fix PSGMII RX 20bit */
-+		phy_write(priv->psgmii_ethphy, MII_BMCR, 0x5b);
-+		/* Freeze PSGMII RX CDR */
-+		phy_write(priv->psgmii_ethphy, MII_RESV2, 0x2230);
-+		mdelay(50);
-+		reset_control_assert(rst);
-+	}
-+
-+	if (how >= 10) {
-+		set_current_state(TASK_INTERRUPTIBLE);
-+		schedule_timeout(msecs_to_jiffies(100 * how));
-+	}
-+
-+	if (how == 1 || how >= 10) {
-+		reset_control_deassert(rst);
-+		mdelay(50);
-+		/* Release PSGMII RX CDR */
-+		phy_write(priv->psgmii_ethphy, MII_RESV2, 0x3230);
-+		/* Release PSGMII RX 20bit */
-+		phy_write(priv->psgmii_ethphy, MII_BMCR, 0x5f);
-+		mdelay(200);
-+	}
-+
-+	reset_control_put(rst);
-+}
-+
 +static int psgmii_vco_calibrate_and_test(struct dsa_switch *ds)
 +{
 +	int ret, a, test_result;
@@ -382,18 +344,19 @@ diff -rNu a/drivers/net/dsa/qca/qca8k-ipq4019.c b/drivers/net/dsa/qca/qca8k-ipq4
 +		} else {
 +			schedule();
 +			if (a > 0 && a % 10 == 0) {
-+				ipq_psgmii_do_reset(priv, 100);
++				dev_err(priv->dev, "PSGMII work is unstable !!! "
++					"Let's try to wait a bit ... %d\n", a);
 +				set_current_state(TASK_INTERRUPTIBLE);
 +				schedule_timeout(msecs_to_jiffies(a * 100));
 +			}
 +		}
 +	}
 +
-+	dev_err(priv->dev,	"PSGMII work is unstable !!! "
++	panic("PSGMII work is unstable !!! "
 +		"Repeated recalibration attempts did not help(0x%x) !\n",
 +		test_result);
 +
-+	return -EINVAL;
++	return -EFAULT;
 +}
 +
  static int ipq4019_psgmii_configure(struct dsa_switch *ds)
@@ -409,7 +372,7 @@ diff -rNu a/drivers/net/dsa/qca/qca8k-ipq4019.c b/drivers/net/dsa/qca/qca8k-ipq4
  					PSGMIIPHY_MODE_ATHR_CSCO_MODE_25M);
 diff -rNu a/drivers/net/dsa/qca/qca8k-ipq4019.h b/drivers/net/dsa/qca/qca8k-ipq4019.h
 --- a/drivers/net/dsa/qca/qca8k-ipq4019.h	2022-04-11 11:01:21.796045947 +0300
-+++ b/drivers/net/dsa/qca/qca8k-ipq4019.h	2022-04-16 08:19:43.767417887 +0300
++++ b/drivers/net/dsa/qca/qca8k-ipq4019.h	2022-04-17 09:07:40.363062812 +0300
 @@ -150,6 +150,7 @@
  #define   QCA8K_PORT_LOOKUP_STATE_FORWARD		(4 << 16)
  #define   QCA8K_PORT_LOOKUP_STATE			GENMASK(18, 16)
@@ -418,7 +381,7 @@ diff -rNu a/drivers/net/dsa/qca/qca8k-ipq4019.h b/drivers/net/dsa/qca/qca8k-ipq4
  
  #define QCA8K_REG_GLOBAL_FC_THRESH			0x800
  #define   QCA8K_GLOBAL_FC_GOL_XON_THRES(x)		((x) << 16)
-@@ -206,6 +207,27 @@
+@@ -206,6 +207,28 @@
  #define PSGMIIPHY_VCO_CALIBRATION_CONTROL_REGISTER_2	0xa0
  #define   PSGMIIPHY_REG_PLL_VCO_CALIB_READY		BIT(0)
  
@@ -442,6 +405,7 @@ diff -rNu a/drivers/net/dsa/qca/qca8k-ipq4019.h b/drivers/net/dsa/qca/qca8k-ipq4
 +#define   QCA8075_MMD7_MDIO_BRDCST_WRITE		0x8028
 +#define   QCA8075_MMD7_MDIO_BRDCST_WRITE_EN BIT(15)
 +#define   QCA8075_MDIO_BRDCST_PHY_ADDR			0x1f
++#define   QCA8075_PKT_GEN_PKTS_COUNT				4096
 +
  enum {
  	QCA8K_PORT_SPEED_10M = 0,

@@ -840,7 +840,7 @@ static int qca8k_test_dsa_port_for_errors(struct qca8k_priv *priv,
 struct phy_device *phy, int port, int test_phase)
 {
 	int res = 0;
-	const int test_pkts_num = 4096;
+	const int test_pkts_num = QCA8075_PKT_GEN_PKTS_COUNT;
 
 	if (test_phase == 1) { /* start test preps */
 		qca8k_phy_loopback_on_off(priv, phy, port, 1);
@@ -920,44 +920,6 @@ error:
 	goto end;
 }
 
-static void ipq_psgmii_do_reset(struct qca8k_priv *priv, int how)
-{
-	struct reset_control *rst;
-	const char rst_name[ ] = "psgmii_rst";
-
-	rst = devm_reset_control_get(priv->dev, rst_name);
-	if (IS_ERR(rst)) {
-		dev_err(priv->dev, "Failed to get %s control!\n", rst_name);
-		return;
-	}
-
-	if (how == 0 || how >= 10) {
-		/* Fix PSGMII RX 20bit */
-		phy_write(priv->psgmii_ethphy, MII_BMCR, 0x5b);
-		/* Freeze PSGMII RX CDR */
-		phy_write(priv->psgmii_ethphy, MII_RESV2, 0x2230);
-		mdelay(50);
-		reset_control_assert(rst);
-	}
-
-	if (how >= 10) {
-		set_current_state(TASK_INTERRUPTIBLE);
-		schedule_timeout(msecs_to_jiffies(100 * how));
-	}
-
-	if (how == 1 || how >= 10) {
-		reset_control_deassert(rst);
-		mdelay(50);
-		/* Release PSGMII RX CDR */
-		phy_write(priv->psgmii_ethphy, MII_RESV2, 0x3230);
-		/* Release PSGMII RX 20bit */
-		phy_write(priv->psgmii_ethphy, MII_BMCR, 0x5f);
-		mdelay(200);
-	}
-
-	reset_control_put(rst);
-}
-
 static int psgmii_vco_calibrate_and_test(struct dsa_switch *ds)
 {
 	int ret, a, test_result;
@@ -981,18 +943,19 @@ static int psgmii_vco_calibrate_and_test(struct dsa_switch *ds)
 		} else {
 			schedule();
 			if (a > 0 && a % 10 == 0) {
-				ipq_psgmii_do_reset(priv, 100);
+				dev_err(priv->dev, "PSGMII work is unstable !!! "
+					"Let's try to wait a bit ... %d\n", a);
 				set_current_state(TASK_INTERRUPTIBLE);
 				schedule_timeout(msecs_to_jiffies(a * 100));
 			}
 		}
 	}
 
-	dev_err(priv->dev,	"PSGMII work is unstable !!! "
+	panic("PSGMII work is unstable !!! "
 		"Repeated recalibration attempts did not help(0x%x) !\n",
 		test_result);
 
-	return -EINVAL;
+	return -EFAULT;
 }
 
 static int ipq4019_psgmii_configure(struct dsa_switch *ds)

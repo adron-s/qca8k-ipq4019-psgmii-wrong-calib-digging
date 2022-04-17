@@ -149,6 +149,7 @@ qca8k_rmw(struct qca8k_priv *priv, u32 reg, u32 mask, u32 write_val)
 #define QCA8075_MMD7_MDIO_BRDCST_WRITE		0x8028
 #define QCA8075_MMD7_MDIO_BRDCST_WRITE_EN BIT(15)
 #define QCA8075_MDIO_BRDCST_PHY_ADDR			0x1f
+#define QCA8075_PKT_GEN_PKTS_COUNT				4096
 
 static void qca8k_switch_port_loopback_on_off(
 struct qca8k_priv *priv, int port, int on)
@@ -336,7 +337,7 @@ static int qca8k_test_dsa_port_for_errors(struct qca8k_priv *priv,
 struct phy_device *phy, int port, int test_phase)
 {
 	int res = 0;
-	const int test_pkts_num = 4096;
+	const int test_pkts_num = QCA8075_PKT_GEN_PKTS_COUNT;
 
 	if (owl == 0) {
 		if (test_phase == 1) { /* start test preps */
@@ -579,7 +580,7 @@ static int __init test_m_module_init(void)
 				} else {
 					schedule();
 					if (a > 0 && a % 10 == 0) {
-						ipq_psgmii_do_reset(priv, a);
+						//ipq_psgmii_do_reset(priv, a);
 						set_current_state(TASK_INTERRUPTIBLE);
 						schedule_timeout(msecs_to_jiffies(a * 100));
 					}
@@ -609,6 +610,9 @@ static int __init test_m_module_init(void)
 				pr_info("0x1812008 val: 0x%x\n", *reg);
 			}
 			iounmap(reg);
+		}
+		if (yyy == 302) {
+			panic("Something goes wrong !\n");
 		}
 	}
 
