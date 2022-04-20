@@ -726,6 +726,9 @@ struct phy_device *phy, int sw_port, int on)
 			QCA8K_PORT_LOOKUP_STATE_DISABLED,
 			QCA8K_PORT_LOOKUP_STATE_DISABLED);
 		phy_write(phy, MII_BMCR, BMCR_SPEED1000 | BMCR_ANENABLE | BMCR_RESET);
+		/* turn off the power of the phys - so that unused
+			 ports do not raise links */
+		phy_modify(phy, MII_BMCR, BMCR_PDOWN, BMCR_PDOWN);
 	}
 }
 

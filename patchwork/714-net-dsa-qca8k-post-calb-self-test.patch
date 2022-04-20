@@ -1,6 +1,6 @@
 diff -rNu a/drivers/net/dsa/qca/qca8k-ipq4019.c b/drivers/net/dsa/qca/qca8k-ipq4019.c
 --- a/drivers/net/dsa/qca/qca8k-ipq4019.c	2022-04-11 11:01:21.796045947 +0300
-+++ b/drivers/net/dsa/qca/qca8k-ipq4019.c	2022-04-17 09:07:04.693210066 +0300
++++ b/drivers/net/dsa/qca/qca8k-ipq4019.c	2022-04-20 07:29:47.127512653 +0300
 @@ -612,24 +612,23 @@
  	return 0;
  }
@@ -43,7 +43,7 @@ diff -rNu a/drivers/net/dsa/qca/qca8k-ipq4019.c b/drivers/net/dsa/qca/qca8k-ipq4
  
  	/* Freeze PSGMII RX CDR */
  	ret = phy_write(priv->psgmii_ethphy, MII_RESV2, 0x2230);
-@@ -649,32 +649,322 @@
+@@ -649,32 +649,325 @@
  			PSGMIIPHY_VCO_CALIBRATION_CONTROL_REGISTER_1,
  			PSGMIIPHY_REG_PLL_VCO_CALIB_RESTART);
  
@@ -127,6 +127,9 @@ diff -rNu a/drivers/net/dsa/qca/qca8k-ipq4019.c b/drivers/net/dsa/qca/qca8k-ipq4
 +			QCA8K_PORT_LOOKUP_STATE_DISABLED,
 +			QCA8K_PORT_LOOKUP_STATE_DISABLED);
 +		phy_write(phy, MII_BMCR, BMCR_SPEED1000 | BMCR_ANENABLE | BMCR_RESET);
++		/* turn off the power of the phys - so that unused
++			 ports do not raise links */
++		phy_modify(phy, MII_BMCR, BMCR_PDOWN, BMCR_PDOWN);
 +	}
 +}
 +
